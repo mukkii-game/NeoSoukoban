@@ -86,6 +86,7 @@ const Sfx = {
   spawn() { this.slide(140, 520, 0.3, 'sine', 0.05); },
   dodge() { this.slide(700, 1100, 0.09, 'sine', 0.035); },
   holeSlide() { this.slide(180, 120, 0.14, 'sine', 0.06); },
+  poof() { this.slide(560, 940, 0.16, 'sine', 0.03); this.tone(1500, 0.1, 'sine', 0.02, 0.1); },
   clear() { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.tone(f, 0.17, 'triangle', 0.07, i * 0.1)); },
   starTick(i) { this.tone(660 + i * 200, 0.12, 'triangle', 0.08); this.tone(1320 + i * 400, 0.1, 'sine', 0.04, 0.04); },
   perfect() { [783.99, 987.77, 1174.66, 1567.98].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.075, i * 0.075)); this.tone(2093, 0.3, 'sine', 0.05, 0.3); },
@@ -389,6 +390,20 @@ function addFx(x, y, text, cls = '') {
 
 function findBoxEl(x, y) { return boxEls.find(b => b.x === x && b.y === y); }
 function findGhostEl(x, y) { return ghostEls.find(g => g.x === x && g.y === y); }
+
+// クリア時、穴に落ちず残ったおばけを「しゅん」と消す（見た目だけの演出。
+// エンジンの cur.ghosts はそのまま＝Undo/Retryは常にstartLevelで作り直すため無関係）
+function poofRemainingGhosts() {
+  ghostEls.forEach((g, i) => {
+    setTimeout(() => {
+      g.el.classList.add('poofing');
+      addFx(g.x, g.y, '✨', 'tiny pop');
+      Sfx.poof();
+      setTimeout(() => g.el.remove(), 560);
+    }, i * 90);
+  });
+  ghostEls = [];
+}
 function isWrapJump(fx, fy, tx, ty) { return Math.abs(fx - tx) > 1 || Math.abs(fy - ty) > 1; }
 
 /* ============ 1手すすめる ============ */
@@ -909,6 +924,7 @@ function onClear() {
   persist();
   Sfx.clear();
   Sfx.duckFor(2800); // BGM は止めずに音量だけ下げる
+  poofRemainingGhosts(); // 穴に落ちず残ったおばけがいたら、しゅんと消しておく
   // 最後に埋まった穴の落下演出(最長でスピン.5s+落下.15s=.65s)が終わってから、
   // 埋まった穴を0.5秒ほど見せてからクリア表示を出す
   const wait = 650 + 500 + pendingStagger;

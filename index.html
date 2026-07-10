@@ -226,6 +226,13 @@
     0%{transform:rotate(720deg) scale(.15); opacity:.28}
     100%{transform:rotate(760deg) scale(0); opacity:0}
   }
+  .sprite.ghost.poofing { z-index:5; }
+  .sprite.ghost.poofing .body { animation:ghostPoof .55s ease-in forwards; }
+  @keyframes ghostPoof {
+    0%{transform:translateY(0) scale(1); opacity:1}
+    35%{transform:translateY(-22%) scale(1.15); opacity:.9}
+    100%{transform:translateY(-70%) scale(.1); opacity:0}
+  }
   .shakeit { animation:shakeit .18s ease-in-out; }
   @keyframes shakeit { 0%,100%{margin-left:0} 30%{margin-left:-4px} 65%{margin-left:4px} }
 
