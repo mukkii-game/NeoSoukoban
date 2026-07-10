@@ -22,6 +22,11 @@ const Sfx = {
     this.duckTimer = setTimeout(() => { this.duckLvl = 1; }, ms);
   },
   init() {
+    // iOSのサイレントスイッチ対策: <audio>要素(メディア再生扱い)を同じ
+    // ユーザー操作内で鳴らしておくと、以後のWebAudio生成音もスイッチの
+    // 影響を受けにくくなる。毎回呼んでも無害（すでに再生中なら何もしない）。
+    const unlockEl = document.getElementById('ios-audio-unlock');
+    if (unlockEl && unlockEl.paused) unlockEl.play().catch(() => {});
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (AC) this.ctx = new AC();
@@ -1110,6 +1115,16 @@ function toggleMute() {
   Sfx.toggle();
   $('btn-mute').textContent = Sfx.muted ? '🔇' : '🔊';
 }
+// タブ/アプリがバックグラウンドから復帰したとき、iOS Safariに止められた
+// AudioContextと無音アンロック用<audio>を再開する（ユーザー操作の直後では
+// ないため resume() が拒否されることもあるが、次のタップで init() が再度
+// 呼ばれるので実害はない）。
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (Sfx.ctx && Sfx.ctx.state === 'suspended') Sfx.ctx.resume().catch(() => {});
+  const unlockEl = document.getElementById('ios-audio-unlock');
+  if (unlockEl && unlockEl.paused) unlockEl.play().catch(() => {});
+});
 
 /* タッチ: スワイプ */
 let touchStart = null;
