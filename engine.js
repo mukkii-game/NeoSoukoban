@@ -279,8 +279,18 @@
             if (result.blocked) {
               fail('bonk', result.cx, result.cy, { what: box.kind, ox: t.x, oy: t.y });
             } else {
-              box.x = u.x; box.y = u.y;
-              events.push({ type: 'push', what: box.kind, fx: t.x, fy: t.y, tx: u.x, ty: u.y });
+              // おばけを押しのけた先（u）が、湧いた直後でまだ動いていない等の
+              // 理由でまだ塞がっていない穴だった場合は、通常どおり箱がそこに
+              // 落ちて塞ぐ（おばけが退いただけで箱がただ乗っかるのは変）。
+              const holeAtU = openHoleAt(s, u.x, u.y);
+              if (holeAtU) {
+                holeAtU.plugged = true; holeAtU.pluggedBy = box.kind;
+                s.boxes.splice(s.boxes.indexOf(box), 1);
+                events.push({ type: 'plug', x: u.x, y: u.y, what: box.kind, fx: t.x, fy: t.y });
+              } else {
+                box.x = u.x; box.y = u.y;
+                events.push({ type: 'push', what: box.kind, fx: t.x, fy: t.y, tx: u.x, ty: u.y });
+              }
               s.player.x = t.x; s.player.y = t.y;
             }
           }
