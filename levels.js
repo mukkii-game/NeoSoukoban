@@ -417,7 +417,7 @@
     {
       id: 'n23', time: 'よあけまえ', name: 'おわかれ',
       wrap: true,
-      spawnInterval: 8, ghostCap: 5, spawnOnce: true,
+      spawnInterval: 8, ghostCap: 11, spawnOnce: false,
       // にもつはゼロ。ぜんぶ おばけの列で どどどど と塞ぐ集大成。
       // よこ3(row1) ・たて3(col8,row5-7) ・よこ5(row9) の3グループ。
       map: [
