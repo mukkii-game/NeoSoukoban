@@ -25,7 +25,9 @@
       wrap: !!level.wrap,
       spawnInterval: level.spawnInterval || 0,
       ghostCap: level.ghostCap != null ? level.ghostCap : 4,
-      rules: { wallPush: true, ghostPush: true, holePush: true },
+      spawnOnce: !!level.spawnOnce, // true なら各穴は生涯で1体しか湧かない
+      rules: { wallPush: true, ghostPush: true, holePush: true, mirrorAxis: true },
+      lastAxis: '', // プレイヤーが最後に動いた軸 'h'|'v'|''（おばけの追跡軸の優先に使う）
       walls: new Array(w * h).fill(false), // 静的なかべ（X と、非wrap面の外周 #）
       hard: new Array(w * h).fill(false),  // X（見た目区別用。UI 専用）
       holes: [],   // {x,y,plugged,pluggedBy,counter}
@@ -48,8 +50,8 @@
         else if (ch === '.') { /* floor */ }
         else if (ch === 'P') s.player = { x, y };
         else if (ch === 'B') s.boxes.push({ x, y, kind: 'box' });
-        else if (ch === 'G') s.ghosts.push({ x, y, stun: 0 });
-        else if (ch === 'O') s.holes.push({ x, y, plugged: false, pluggedBy: null, counter: level.spawnInterval || 0 });
+        else if (ch === 'G') s.ghosts.push({ x, y, stun: 0, momentum: null });
+        else if (ch === 'O') s.holes.push({ x, y, plugged: false, pluggedBy: null, counter: level.spawnInterval || 0, spawned: false });
         else throw new Error(level.name + ': unknown map char "' + ch + '"');
       }
     }
@@ -62,15 +64,15 @@
   function clone(s) {
     return {
       w: s.w, h: s.h, wrap: s.wrap,
-      spawnInterval: s.spawnInterval, ghostCap: s.ghostCap,
+      spawnInterval: s.spawnInterval, ghostCap: s.ghostCap, spawnOnce: s.spawnOnce,
       rules: s.rules,   // 不変なので共有
       walls: s.walls,   // 不変なので共有
       hard: s.hard,     // 不変なので共有
-      holes: s.holes.map(o => ({ x: o.x, y: o.y, plugged: o.plugged, pluggedBy: o.pluggedBy, counter: o.counter })),
+      holes: s.holes.map(o => ({ x: o.x, y: o.y, plugged: o.plugged, pluggedBy: o.pluggedBy, counter: o.counter, spawned: o.spawned })),
       player: { x: s.player.x, y: s.player.y },
       boxes: s.boxes.map(b => ({ x: b.x, y: b.y, kind: b.kind })),
-      ghosts: s.ghosts.map(g => ({ x: g.x, y: g.y, stun: g.stun })),
-      turn: s.turn, status: s.status,
+      ghosts: s.ghosts.map(g => ({ x: g.x, y: g.y, stun: g.stun, momentum: g.momentum })),
+      turn: s.turn, status: s.status, lastAxis: s.lastAxis,
     };
   }
 
@@ -106,12 +108,24 @@
   // おばけ1体の次の位置（動けなければ null）。
   // プレイヤーのマスには入れない（このゲームに敗北は存在しない）。
   function ghostNext(s, g) {
-    const ddx = signedDelta(g.x, s.player.x, s.w, s.wrap);
-    const ddy = signedDelta(g.y, s.player.y, s.h, s.wrap);
+    let ddx = signedDelta(g.x, s.player.x, s.w, s.wrap);
+    let ddy = signedDelta(g.y, s.player.y, s.h, s.wrap);
+    // ループ面: 近く（マンハッタン距離3以内）ではワープ越しに追うが、
+    // 遠いときはワープのことを忘れてまっすぐ向かう（直感に合わせる）
+    if (s.wrap) {
+      const pdx = s.player.x - g.x, pdy = s.player.y - g.y;
+      if (Math.abs(pdx) + Math.abs(pdy) > 3) { ddx = pdx; ddy = pdy; }
+    }
     const cands = [];
     const hstep = { dx: Math.sign(ddx), dy: 0 };
     const vstep = { dx: 0, dy: Math.sign(ddy) };
-    if (Math.abs(ddx) >= Math.abs(ddy)) {
+    // 軸の優先: プレイヤーが最後に動いた軸に合わせてついてくる（鏡像軸）。
+    // 動いていない/その軸の差が0のときは距離の大きい軸を優先。
+    let preferH;
+    if (s.rules.mirrorAxis && s.lastAxis === 'h' && ddx !== 0) preferH = true;
+    else if (s.rules.mirrorAxis && s.lastAxis === 'v' && ddy !== 0) preferH = false;
+    else preferH = Math.abs(ddx) >= Math.abs(ddy);
+    if (preferH) {
       if (ddx !== 0) cands.push(hstep);
       if (ddy !== 0) cands.push(vstep);
     } else {
@@ -129,6 +143,60 @@
     return null;
   }
 
+  // おばけの列を dx,dy 方向に押す共通処理（プレイヤーが直接押す場合と、
+  // 箱がおばけに突き当たって押す場合の両方から呼ばれる）。
+  // soloAlwaysDodges が true のときだけ、単体（列の長さ1）は「よけて戻る」
+  // （＝押し手の後ろが空くので逃げ場がある）。false のときは単体でも戻れず
+  // その場に留まる（＝箱に押された場合。箱自身が戻り先を塞いでしまうため）。
+  // hadMomentum: 前ターンに（連結列の一員として）押されて生き残った子を
+  // その時の方向つきで記録した Map（ghost -> dir文字列）。
+  // 同じ方向へ押され続けている（＝直前ターンにも同方向に押されて動いていた）
+  // 単体は、まだ勢いがついているとみなしてよけない＝連打・長押しし続ける限り
+  // 列がちぎれても最後の1体まで押し込める。方向を変えたり1手でも他のことを
+  // すると勢いは失われ、次に押されたときはまた素直によける。
+  // 戻り値: { blocked:true, cx, cy } / { dodge:true } / { moved:true }
+  function pushGhostChain(s, events, ghost, dx, dy, dirName, soloAlwaysDodges, hadMomentum) {
+    const chain = [ghost];
+    let cx = ghost.x, cy = ghost.y, loop = false;
+    while (true) {
+      const n = cellInDir(s, cx, cy, dx, dy);
+      const g2 = ghostAt(s, n.x, n.y);
+      cx = n.x; cy = n.y;
+      if (!g2) break;
+      if (chain.includes(g2)) { loop = true; break; } // wrap一周の輪
+      chain.push(g2);
+    }
+    const hole = loop ? null : openHoleAt(s, cx, cy);
+    if (loop || isWall(s, cx, cy) || boxAt(s, cx, cy) ||
+        (cx === s.player.x && cy === s.player.y)) {
+      return { blocked: true, cx, cy };
+    }
+    if (chain.length === 1 && soloAlwaysDodges && hadMomentum.get(ghost) !== dirName) {
+      // 単体のおばけは、押し手の後ろが空いていれば必ずよけて戻る
+      // （逃げ場がなくなる＝2体以上の連結か、箱に押された場合、または
+      // 直前ターンからの勢いが残っている場合だけ捕まる）。
+      ghost.stun = 1; // よけるのに精一杯で、このターンは動けない
+      events.push({ type: 'dodge', x: ghost.x, y: ghost.y, dx, dy, tx: cx, ty: cy });
+      return { dodge: true };
+    }
+    // 遠い側から順に1マスずつ進める（列の先頭1体だけがその穴を塞ぐ。他は1マス詰めるだけ）
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const g = chain[i];
+      const n = cellInDir(s, g.x, g.y, dx, dy);
+      if (i === chain.length - 1 && hole) {
+        hole.plugged = true; hole.pluggedBy = 'ghost';
+        s.ghosts.splice(s.ghosts.indexOf(g), 1);
+        events.push({ type: 'plug', x: n.x, y: n.y, what: 'ghost', fx: g.x, fy: g.y });
+      } else {
+        events.push({ type: 'push', what: 'ghost', fx: g.x, fy: g.y, tx: n.x, ty: n.y });
+        g.x = n.x; g.y = n.y;
+        g.stun = 1; // 押されたおばけは目を回してこのターン動けない
+        g.momentum = dirName; // 次のターンも同方向に押され続ければ、よけずに済む
+      }
+    }
+    return { moved: true };
+  }
+
   /* 1入力 = 1ターン。決定論的に状態を進める。
    * できない操作（壁ドン・押せない・よけられる・こわい）でも世界は1ターン進む
    * ＝実質の「待つ」。明示的な wait も残す。
@@ -140,6 +208,10 @@
     const [dx, dy] = DIRS[dir];
     const s = clone(prev);
     const fail = (type, x, y, extra) => { events.push(Object.assign({ type, x, y }, extra || {})); };
+    // 前ターンの「勢い」を読み取ってから、このターンぶんはいったん全員リセット
+    // （このターンに押された子だけ、末尾で改めてセットし直す）
+    const hadMomentum = new Map();
+    for (const g of s.ghosts) { if (g.momentum) hadMomentum.set(g, g.momentum); g.momentum = null; }
 
     // --- 1) プレイヤーフェイズ ---
     if (dir === 'wait') {
@@ -152,12 +224,27 @@
       if (isWall(s, t.x, t.y)) {
         fail('bonk', t.x, t.y);
       } else if (box) {
-        // 箱・かべ: 1つだけ押せる
+        // 箱・かべ: 1つだけ押せる。先におばけがいる場合は、箱でおばけ（の列）を
+        // 押しのける（箱自身が戻り先を塞ぐので、単体のおばけでも逃げられない）。
         const u = cellInDir(s, t.x, t.y, dx, dy);
-        if ((box.kind === 'wall' && !s.rules.wallPush) ||
-            isWall(s, u.x, u.y) || occupied(s, u.x, u.y) ||
-            (u.x === s.player.x && u.y === s.player.y)) {
-          fail('bonk', u.x, u.y);
+        const blockedByWall = (box.kind === 'wall' && !s.rules.wallPush) ||
+          isWall(s, u.x, u.y) || boxAt(s, u.x, u.y) || (u.x === s.player.x && u.y === s.player.y);
+        const blockingGhost = blockedByWall ? null : ghostAt(s, u.x, u.y);
+        if (blockedByWall) {
+          fail('bonk', u.x, u.y, { what: box.kind, ox: t.x, oy: t.y });
+        } else if (blockingGhost) {
+          if (!s.rules.ghostPush) {
+            fail('bonk', u.x, u.y, { what: box.kind, ox: t.x, oy: t.y });
+          } else {
+            const result = pushGhostChain(s, events, blockingGhost, dx, dy, dir, false, hadMomentum);
+            if (result.blocked) {
+              fail('bonk', result.cx, result.cy, { what: box.kind, ox: t.x, oy: t.y });
+            } else {
+              box.x = u.x; box.y = u.y;
+              events.push({ type: 'push', what: box.kind, fx: t.x, fy: t.y, tx: u.x, ty: u.y });
+              s.player.x = t.x; s.player.y = t.y;
+            }
+          }
         } else {
           const hole = openHoleAt(s, u.x, u.y);
           if (hole) {
@@ -171,46 +258,18 @@
           s.player.x = t.x; s.player.y = t.y;
         }
       } else if (ghost) {
-        // おばけ: 列になっていればまとめて押せる（チェーン押し）
+        // おばけ: 列になっていればまとめて押せる（チェーン押し）。
+        // プレイヤーが直接押す場合、単体は必ずよけて戻る（soloAlwaysDodges=true）。
         if (!s.rules.ghostPush) {
           fail('bonk', t.x, t.y);
         } else {
-          const chain = [ghost];
-          let cx = t.x, cy = t.y, loop = false;
-          while (true) {
-            const n = cellInDir(s, cx, cy, dx, dy);
-            const g2 = ghostAt(s, n.x, n.y);
-            cx = n.x; cy = n.y;
-            if (!g2) break;
-            if (chain.includes(g2)) { loop = true; break; } // wrap一周の輪
-            chain.push(g2);
-          }
-          const hole = loop ? null : openHoleAt(s, cx, cy);
-          if (loop || isWall(s, cx, cy) || boxAt(s, cx, cy) ||
-              (cx === s.player.x && cy === s.player.y)) {
-            fail('bonk', cx, cy);
-          } else if (chain.length === 1 && !hole) {
-            // 単体のおばけは、真後ろが穴のとき（逃げ場がない）だけ押せる。
-            // それ以外は 1コマ押し出されてから、するりと元の位置へ戻る。
-            ghost.stun = 1; // よけるのに精一杯で、このターンは動けない
-            fail('dodge', t.x, t.y, { dx, dy, tx: cx, ty: cy });
-          } else {
-            // 遠い側から順に1マスずつ進める
-            for (let i = chain.length - 1; i >= 0; i--) {
-              const g = chain[i];
-              const n = cellInDir(s, g.x, g.y, dx, dy);
-              if (i === chain.length - 1 && hole) {
-                hole.plugged = true; hole.pluggedBy = 'ghost';
-                s.ghosts.splice(s.ghosts.indexOf(g), 1);
-                events.push({ type: 'plug', x: n.x, y: n.y, what: 'ghost', fx: g.x, fy: g.y });
-              } else {
-                events.push({ type: 'push', what: 'ghost', fx: g.x, fy: g.y, tx: n.x, ty: n.y });
-                g.x = n.x; g.y = n.y;
-                g.stun = 1; // 押されたおばけは目を回してこのターン動けない
-              }
-            }
+          const result = pushGhostChain(s, events, ghost, dx, dy, dir, true, hadMomentum);
+          if (result.blocked) {
+            fail('bonk', result.cx, result.cy);
+          } else if (result.moved) {
             s.player.x = t.x; s.player.y = t.y;
           }
+          // result.dodge の場合、プレイヤーは動かない（今までどおり）
         }
       } else if (openHoleAt(s, t.x, t.y)) {
         // 穴そのものも押せる（知識アンロック）。押せないときは怖くて入れない
@@ -232,6 +291,11 @@
         events.push({ type: 'walk', x: t.x, y: t.y });
       }
     }
+    if (dir !== 'wait' && (s.player.x !== prev.player.x || s.player.y !== prev.player.y ||
+        events.some(e => e.type === 'push' || e.type === 'plug' || e.type === 'holePush'))) {
+      s.lastAxis = dx !== 0 ? 'h' : 'v';
+    }
+
     s.turn++;
 
     // --- 2) クリア判定（最後の穴を塞いだ瞬間に勝ち。おばけは動かない） ---
@@ -242,9 +306,67 @@
     }
 
     // --- 3) おばけフェイズ ---
+    // 連結追従（ぱっくまんの列）: プレイヤーが空けたマスに隣の子が入り、
+    // その子が空けたマスにさらに隣の子が入り……と、遠ざからない限り列ごと続く。
+    // 列に入らなかった子は鏡像軸（プレイヤーが最後に動いた軸を優先）で近づく。
+    const pOldX = prev.player.x, pOldY = prev.player.y;
+    const playerMoved = s.player.x !== pOldX || s.player.y !== pOldY;
     sortGhosts(s);
+    const acted = new Set();
     for (const g of s.ghosts) {
-      if (g.stun > 0) { g.stun--; events.push({ type: 'dizzy', x: g.x, y: g.y }); continue; }
+      if (g.stun > 0) { g.stun--; acted.add(g); events.push({ type: 'dizzy', x: g.x, y: g.y }); }
+    }
+    const dist = (x1, y1, x2, y2) =>
+      Math.abs(signedDelta(x1, x2, s.w, s.wrap)) + Math.abs(signedDelta(y1, y2, s.h, s.wrap));
+    // プレイヤーから途切れずつながっている「列」のメンバーは、道なりに無条件で追従する。
+    // 列に属していない子だけ「そこへ入ると遠ざかるなら合流しない」ガードが効く。
+    const trainSet = new Set();
+    {
+      const frontier = [{ x: pOldX, y: pOldY }, { x: s.player.x, y: s.player.y }];
+      while (frontier.length) {
+        const c = frontier.pop();
+        for (const g of s.ghosts) {
+          if (trainSet.has(g)) continue;
+          if (dist(g.x, g.y, c.x, c.y) === 1) { trainSet.add(g); frontier.push({ x: g.x, y: g.y }); }
+        }
+      }
+    }
+    if (playerMoved) {
+      let vac = { x: pOldX, y: pOldY };
+      for (let hop = 0; hop < s.ghosts.length && vac; hop++) {
+        if (occupied(s, vac.x, vac.y) || openHoleAt(s, vac.x, vac.y) ||
+            (vac.x === s.player.x && vac.y === s.player.y)) break;
+        let follower = null;
+        for (const g of s.ghosts) {
+          if (acted.has(g)) continue;
+          if (dist(g.x, g.y, vac.x, vac.y) !== 1) continue;
+          if (!trainSet.has(g) &&
+              dist(vac.x, vac.y, s.player.x, s.player.y) > dist(g.x, g.y, s.player.x, s.player.y)) continue;
+          follower = g; break;
+        }
+        if (!follower) break;
+        const fx = follower.x, fy = follower.y;
+        follower.x = vac.x; follower.y = vac.y;
+        acted.add(follower);
+        events.push({ type: 'ghostMove', fx, fy, tx: vac.x, ty: vac.y, chain: true });
+        vac = { x: fx, y: fy };
+      }
+    }
+    // きんぎょのフン: プレイヤーから途切れずつながっている子は隊列を保つ（勝手に崩れない）
+    const inTrain = new Set();
+    {
+      const frontier = [{ x: s.player.x, y: s.player.y }];
+      while (frontier.length) {
+        const c = frontier.pop();
+        for (const g of s.ghosts) {
+          if (inTrain.has(g)) continue;
+          if (dist(g.x, g.y, c.x, c.y) === 1) { inTrain.add(g); frontier.push({ x: g.x, y: g.y }); }
+        }
+      }
+    }
+    for (const g of s.ghosts) {
+      if (acted.has(g)) continue;
+      if (inTrain.has(g)) continue; // 隊列保持
       const t = ghostNext(s, g);
       if (!t) continue;
       const fx = g.x, fy = g.y;
@@ -256,12 +378,14 @@
     if (s.spawnInterval > 0) {
       for (const o of s.holes) {
         if (o.plugged) continue;
+        if (s.spawnOnce && o.spawned) continue; // 生涯で1体だけの穴は、湧いたら二度と湧かない
         if (o.counter > 0) o.counter--;
         if (o.counter <= 0) {
           if (s.ghosts.length < s.ghostCap && !occupied(s, o.x, o.y) &&
               !(s.player.x === o.x && s.player.y === o.y)) {
-            s.ghosts.push({ x: o.x, y: o.y, stun: 0 }); // 湧いたターンは動かない
+            s.ghosts.push({ x: o.x, y: o.y, stun: 0, momentum: null }); // 湧いたターンは動かない
             o.counter = s.spawnInterval;
+            o.spawned = true;
             events.push({ type: 'spawn', x: o.x, y: o.y });
           }
           // cap 超過などで湧けない場合は counter 0 のまま次ターン再試行
@@ -275,9 +399,9 @@
   // ソルバー用: 状態の正規化キー（turn は含めない）
   function serialize(s) {
     const boxes = s.boxes.map(b => b.kind[0] + b.x + ',' + b.y).sort().join('|');
-    const ghosts = s.ghosts.map(g => g.x + ',' + g.y + (g.stun ? '*' : '')).sort().join('|');
-    const holes = s.holes.map(o => o.x + ',' + o.y + ':' + (o.plugged ? 'X' : o.counter)).join('|');
-    return s.player.x + ',' + s.player.y + ';' + boxes + ';' + ghosts + ';' + holes;
+    const ghosts = s.ghosts.map(g => g.x + ',' + g.y + (g.stun ? '*' : '') + (g.momentum ? 'm' + g.momentum[0] : '')).sort().join('|');
+    const holes = s.holes.map(o => o.x + ',' + o.y + ':' + (o.plugged ? 'X' : o.counter) + (o.spawned ? 's' : '')).join('|');
+    return s.player.x + ',' + s.player.y + ';' + boxes + ';' + ghosts + ';' + holes + ';' + s.lastAxis;
   }
 
   return {

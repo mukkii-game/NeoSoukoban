@@ -22,7 +22,7 @@ function makeStart(level, overrides = {}) {
   const s = Engine.parseLevel(lvl);
   if (overrides.noGhosts) s.ghostCap = 0;
   s.rules = { ...s.rules };
-  for (const k of ['wallPush', 'ghostPush', 'holePush']) {
+  for (const k of ['wallPush', 'ghostPush', 'holePush', 'mirrorAxis']) {
     if (overrides[k] !== undefined) s.rules[k] = overrides[k];
   }
   return s;
@@ -50,6 +50,9 @@ export function solve(level, overrides = {}, opts = {}) {
           return { solved: false, reason: 'state-explosion', states: seen.size };
         }
         next.push({ s: state, path: [...node.path, d] });
+        if (next.length > 400000) {
+          return { solved: false, reason: 'state-explosion', states: seen.size }; // メモリガード
+        }
       }
     }
     frontier = next;
@@ -64,8 +67,7 @@ export function solve(level, overrides = {}, opts = {}) {
 export { LEVELS, Engine };
 
 // CLI として直接実行されたときだけ検証を走らせる
-if (import.meta.url === new URL('file://' + process.argv[1].replace(/\\/g, '/')).href ||
-    process.argv[1] && process.argv[1].endsWith('solve.mjs')) {
+if (process.argv[1] && process.argv[1].endsWith('solve.mjs')) {
   runCli();
 }
 function runCli() {
@@ -99,6 +101,7 @@ function greedySolve(level, opts = {}) {
           if (state.status === 'clear' || plugged > plugged0) { found = { state, p }; break; }
           if (seen.size > stageCap) return { solved: false, reason: 'greedy-stage-explosion(stage ' + stage + ')' };
           next.push({ s: state, path: p });
+          if (next.length > 300000) return { solved: false, reason: 'greedy-frontier-explosion(stage ' + stage + ')' };
         }
         if (found) break;
       }
@@ -126,7 +129,11 @@ for (const level of LEVELS) {
     let diag = '';
     if (!res.greedy && (/G/.test(level.map.join('')) || level.spawnInterval)) {
       const ng = solve(level, { noGhosts: true, spawnInterval: 0 });
-      diag = ng.solved ? ` [おばけ無し: ${ng.moves}手 ${ng.moves === res.moves ? '⚠️飾り?' : 'OK絡む'}]` : ' [おばけ無しでは非可解=必須]';
+      diag = ng.solved
+        ? ` [おばけ無し: ${ng.moves}手 ${ng.moves === res.moves ? '⚠️飾り?' : 'OK絡む'}]`
+        : (String(ng.reason).startsWith('exhausted')
+          ? ' [おばけ無しでは非可解=必須]'
+          : ' [おばけ無し診断: 判定不能(爆発)]');
     }
     const kind = res.greedy ? 'witness(グリーディ)' : '最短';
     console.log(`✅ ${level.id} ${level.name}: ${kind} ${res.moves} 手 (${res.states || '-'} states, ${ms}ms)${diag}`);

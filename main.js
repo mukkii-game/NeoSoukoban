@@ -7,14 +7,20 @@
 /* ============ セーブ ============ */
 const STORAGE_KEY = 'anafusagi_v1';
 const SAVE = (() => {
-  try { return Object.assign({ cleared: {}, muted: false }, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')); }
-  catch (e) { return { cleared: {}, muted: false }; }
+  try { return Object.assign({ cleared: {}, best: {}, muted: false }, JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')); }
+  catch (e) { return { cleared: {}, best: {}, muted: false }; }
 })();
+SAVE.best = SAVE.best || {};
 function persist() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(SAVE)); } catch (e) {} }
 
 /* ============ サウンド（WebAudio ミニSE） ============ */
 const Sfx = {
-  ctx: null, muted: !!SAVE.muted, bgmTimer: null, bgmStep: 0,
+  ctx: null, muted: !!SAVE.muted, bgmTimer: null, bgmStep: 0, duckLvl: 1, duckTimer: null,
+  duckFor(ms) {
+    this.duckLvl = 0.22;
+    if (this.duckTimer) clearTimeout(this.duckTimer);
+    this.duckTimer = setTimeout(() => { this.duckLvl = 1; }, ms);
+  },
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -31,21 +37,24 @@ const Sfx = {
       [164.81, 196.00, 246.94],   // Em
     ];
     const bass = [110.00, 87.31, 98.00, 82.41];
-    // A メロ×2 → B メロ×1 → A に戻る（16 ステップ = 4 小節）
+    // A メロ×2 → B メロ(盛り上げ) → C メロ(しみじみ余韻) → A に戻る（16 ステップ = 4 小節 ×4 パート）
     const melodyA = [523.25, 0, 440.00, 493.88, 0, 659.25, 587.33, 0, 523.25, 0, 440.00, 0, 392.00, 440.00, 0, 0];
     const melodyB = [659.25, 0, 783.99, 659.25, 0, 587.33, 523.25, 0, 587.33, 659.25, 0, 523.25, 0, 493.88, 440.00, 0];
+    const melodyC = [440.00, 0, 523.25, 0, 587.33, 659.25, 0, 587.33, 0, 523.25, 0, 466.16, 440.00, 0, 392.00, 0];
+    const parts = [melodyA, melodyA, melodyB, melodyC];
+    const partVol = [0.016, 0.016, 0.02, 0.019];
     this.bgmTimer = setInterval(() => {
       if (!this.ctx || this.muted || document.hidden) return;
       if (!window.__bgmOk || !window.__bgmOk()) return;
+      const d = this.duckLvl; // クリアジングル中は音量を下げる（止めない）
       const bar = Math.floor(this.bgmStep / 4) % chords.length;
       if (this.bgmStep % 4 === 0) {
-        chords[bar].forEach((f, i) => this.tone(f, 1.7, 'sine', 0.012, i * 0.04));
-        this.tone(bass[bar], 1.2, 'triangle', 0.02);
+        chords[bar].forEach((f, i) => this.tone(f, 1.7, 'sine', 0.012 * d, i * 0.04));
+        this.tone(bass[bar], 1.2, 'triangle', 0.02 * d);
       }
-      const section = Math.floor(this.bgmStep / 16) % 3; // A A B
-      const melody = section === 2 ? melodyB : melodyA;
-      const m = melody[this.bgmStep % 16];
-      if (m) this.tone(m, 0.34, 'triangle', section === 2 ? 0.02 : 0.016, 0.05);
+      const part = Math.floor(this.bgmStep / 16) % parts.length; // A A B C
+      const m = parts[part][this.bgmStep % 16];
+      if (m) this.tone(m, 0.34, 'triangle', partVol[part] * d, 0.05);
       this.bgmStep++;
     }, 500);
   },
@@ -68,14 +77,18 @@ const Sfx = {
     o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t + dur + 0.02);
   },
   walk() { this.tone(420 + Math.random() * 60, 0.04, 'triangle', 0.028); },
+  wobble() { this.tone(520, 0.045, 'triangle', 0.035); this.tone(440, 0.045, 'triangle', 0.035, 0.06); },
   push() { this.tone(170, 0.07, 'square', 0.045); },
   bonk() { this.tone(110, 0.08, 'square', 0.05); },
+  gon(i = 0) { this.tone(170 * Math.pow(0.93, i), 0.08, 'square', 0.09); this.tone(62, 0.1, 'sine', 0.07); },
   scared() { this.tone(620, 0.06, 'triangle', 0.05); this.tone(500, 0.07, 'triangle', 0.05, 0.07); },
   plug() { this.slide(300, 90, 0.16, 'sine', 0.09); this.tone(880, 0.1, 'triangle', 0.05, 0.14); this.tone(1320, 0.12, 'sine', 0.04, 0.2); },
   spawn() { this.slide(140, 520, 0.3, 'sine', 0.05); },
   dodge() { this.slide(700, 1100, 0.09, 'sine', 0.035); },
   holeSlide() { this.slide(180, 120, 0.14, 'sine', 0.06); },
   clear() { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.tone(f, 0.17, 'triangle', 0.07, i * 0.1)); },
+  starTick(i) { this.tone(660 + i * 200, 0.12, 'triangle', 0.08); this.tone(1320 + i * 400, 0.1, 'sine', 0.04, 0.04); },
+  perfect() { [783.99, 987.77, 1174.66, 1567.98].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.075, i * 0.075)); this.tone(2093, 0.3, 'sine', 0.05, 0.3); },
   menu() { this.tone(520, 0.05, 'sine', 0.04); },
   ending() { [392, 523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => this.tone(f, 0.5, 'sine', 0.05, i * 0.35)); },
   toggle() { this.muted = !this.muted; SAVE.muted = this.muted; persist(); },
@@ -90,14 +103,49 @@ const SOLUTIONS = window.SOLUTIONS || {};
 
 function showScreen(name) {
   for (const k in screens) screens[k].classList.toggle('active', k === name);
+  if (name !== 'game') {
+    // ゲーム画面を離れるときはクリアオーバーレイも必ず閉じる（表示待ちタイマーも破棄し、あとから浮き出るのを防ぐ）
+    if (clearOvTimer) { clearTimeout(clearOvTimer); clearOvTimer = null; }
+    ovClear.classList.remove('active');
+  }
+  if (name === 'title') {
+    const hasProgress = LEVELS.some(lv => SAVE.cleared[lv.id]);
+    $('btn-continue').style.display = hasProgress ? '' : 'none';
+    $('btn-newgame').classList.toggle('primary', !hasProgress);
+    titleIndex = 0;
+    updateTitleFocus();
+  }
+}
+
+/* ============ タイトル/レベル選択のキーボード操作 ============ */
+let titleIndex = 0;
+function titleButtons() {
+  return ['btn-continue', 'btn-newgame', 'btn-select'].map(id => $(id))
+    .filter(b => b.style.display !== 'none');
+}
+function updateTitleFocus() {
+  const btns = titleButtons();
+  titleIndex = Math.max(0, Math.min(btns.length - 1, titleIndex));
+  btns.forEach((b, i) => b.classList.toggle('kfocus', i === titleIndex));
+}
+let selIndex = 0;
+let selCards = [];
+function updateSelectFocus() {
+  selIndex = Math.max(0, Math.min(selCards.length - 1, selIndex));
+  selCards.forEach((c, i) => c.classList.toggle('kfocus', i === selIndex));
+  const el = selCards[selIndex];
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
 }
 
 /* ============ ゲーム状態 ============ */
 let levelIndex = 0;
 let cur = null;             // engine state
 let undoStack = [];
+let playGen = 0;            // レベル開始/やりなおしのたびに+1。古い試行の遅延コールバック（アニメ・タイマー）が
+                             // リセット後の新しい試行の状態を書き換えないよう、各コールバックの先頭で照合する
 let cell = 48;
 let holeEls = [];           // 穴タイル要素（holes 配列と同順）
+let pendingHoleFills = new Set(); // 落下演出が終わるまで「埋まった」見た目を保留する穴のindex
 let playerEl = null;
 let boxEls = [];            // {el,x,y,kind}
 let ghostEls = [];          // {el,x,y}
@@ -107,9 +155,10 @@ let lastInputAt = 0;
 let ended = false;          // エンディング再生中フラグ
 let autoplay = null;        // 模範解答再生タイマー
 let clearOvTimer = null;    // クリア演出の遅延表示タイマー（レベル移動時に必ず破棄する）
+let pendingStagger = 0;     // ぎょうれつ演出の残り時間（クリア演出を待たせる）
 
-// BGM を鳴らしてよい状況か（Sfx から参照）
-window.__bgmOk = () => screens.game.classList.contains('active') && cur && cur.status === 'playing' && !ended;
+// BGM を鳴らしてよい状況か（Sfx から参照）。クリア後も止めない（ジングル中はダッキング）
+window.__bgmOk = () => screens.game.classList.contains('active') && cur && !ended;
 
 function isUnlocked(i) { return SAVE.unlockAll || i === 0 || !!SAVE.cleared[LEVELS[i - 1].id]; }
 function allCleared() { return LEVELS.every(l => SAVE.cleared[l.id]); }
@@ -118,36 +167,67 @@ function allCleared() { return LEVELS.every(l => SAVE.cleared[l.id]); }
 function buildSelect() {
   const grid = $('level-grid');
   grid.innerHTML = '';
+  selCards = [];
   LEVELS.forEach((lv, i) => {
     const card = document.createElement('button');
     const unlocked = isUnlocked(i);
     const cleared = !!SAVE.cleared[lv.id];
-    card.className = 'level-card' + (unlocked ? '' : ' locked') + (cleared ? ' cleared' : '');
+    const perfect = cleared && isPerfectCleared(lv.id);
+    card.className = 'level-card' + (unlocked ? '' : ' locked') + (cleared ? ' cleared' : '') + (perfect ? ' perfect' : '');
+    if (perfect) card.title = 'Perfect! さいたん手数でクリアずみ';
     card.innerHTML =
       `<div class="t">${lv.time}</div>` +
       `<div class="n">${unlocked ? lv.name : '？？？'}</div>` +
-      `<div class="s">${cleared ? '⭐' : unlocked ? '🌙' : '🔒'}</div>`;
+      `<div class="s">${cleared ? '<span class="stars' + (perfect ? ' perfect' : '') + '">' + starStr(starsFor(lv.id)) + '</span>' : unlocked ? '🌙' : '🔒'}</div>` +
+      (perfect ? '<div class="pmini">Perfect!</div>' : '');
     if (unlocked) card.addEventListener('click', () => { Sfx.init(); Sfx.menu(); startLevel(i); });
     grid.appendChild(card);
+    selCards.push(card);
   });
+  // カーソル初期位置: 最初の未クリア（なければ先頭）
+  let first = LEVELS.findIndex(lv => !SAVE.cleared[lv.id]);
+  if (first === -1) first = 0;
+  selIndex = first;
+  updateSelectFocus();
 }
 
-/* ============ 盤面レイアウト ============ */
+/* ============ 盤面レイアウト（セルサイズは全面統一。大きい面はカメラが追従） ============ */
+const boardWrapEl = $('board-wrap');
+let viewW = 0, viewH = 0;
 function layout() {
   if (!cur) return;
-  const availW = Math.min(window.innerWidth - 24, 620);
   const isTouch = matchMedia('(hover:none) and (pointer:coarse)').matches;
-  const availH = window.innerHeight - (isTouch ? 320 : 210);
-  cell = Math.max(26, Math.min(60, Math.floor(Math.min(availW / cur.w, availH / cur.h))));
+  cell = isTouch ? 44 : 52; // 縮小しない
   document.documentElement.style.setProperty('--cell', cell + 'px');
-  boardEl.style.width = (cur.w * cell) + 'px';
-  boardEl.style.height = (cur.h * cell) + 'px';
+  const availW = Math.min(window.innerWidth - 16, 940);
+  const availH = Math.max(200, window.innerHeight - (isTouch ? 330 : 215));
+  const boardW = cur.w * cell, boardH = cur.h * cell;
+  viewW = Math.min(boardW, availW);
+  viewH = Math.min(boardH, availH);
+  boardEl.style.width = boardW + 'px';
+  boardEl.style.height = boardH + 'px';
+  boardWrapEl.style.width = viewW + 'px';
+  boardWrapEl.style.height = viewH + 'px';
   // 全スプライト再配置（アニメなし）
   placeSprite(playerEl, cur.player.x, cur.player.y, true);
   boxEls.forEach(b => placeSprite(b.el, b.x, b.y, true));
   ghostEls.forEach(g => placeSprite(g.el, g.x, g.y, true));
+  updateCamera(true);
 }
 window.addEventListener('resize', layout);
+
+// プレイヤーが常に見えるように盤面をパンする
+function updateCamera(instant = false) {
+  if (!cur) return;
+  const boardW = cur.w * cell, boardH = cur.h * cell;
+  let tx = Math.round(viewW / 2 - (cur.player.x + 0.5) * cell);
+  let ty = Math.round(viewH / 2 - (cur.player.y + 0.5) * cell);
+  tx = Math.min(0, Math.max(viewW - boardW, tx));
+  ty = Math.min(0, Math.max(viewH - boardH, ty));
+  if (instant) boardEl.classList.add('camsnap');
+  boardEl.style.transform = `translate(${tx}px, ${ty}px)`;
+  if (instant) { void boardEl.offsetWidth; boardEl.classList.remove('camsnap'); }
+}
 
 function placeSprite(el, x, y, instant = false) {
   if (!el) return;
@@ -179,6 +259,7 @@ function squash(el) {
 
 /* ============ レベル読み込み・描画 ============ */
 function startLevel(i, keepEffort = false) {
+  playGen++;
   levelIndex = i;
   const lv = LEVELS[i];
   cur = Engine.parseLevel(lv);
@@ -186,18 +267,19 @@ function startLevel(i, keepEffort = false) {
   if (!keepEffort) { levelEffort = 0; whisperShown = false; }
   if (clearOvTimer) { clearTimeout(clearOvTimer); clearOvTimer = null; }
   ovClear.classList.remove('active');
+  $('clear-perfect').innerHTML = '';
   $('hud-time').textContent = lv.time;
   $('hud-name').textContent = lv.name;
-  $('whisper').classList.remove('show');
-  deadlockShown = false;
+  hideDeadlockOverlay();
   lastCheckedKey = '';
+  pendingStagger = 0;
   if (deadlockTimer) { clearTimeout(deadlockTimer); deadlockTimer = null; }
 
   // 静的タイル
   tilesEl.innerHTML = '';
   objsEl.innerHTML = '';
   fxEl.innerHTML = '';
-  holeEls = []; boxEls = []; ghostEls = [];
+  holeEls = []; boxEls = []; ghostEls = []; pendingHoleFills = new Set();
   boardEl.classList.toggle('wrapmode', !!cur.wrap);
   boardEl.classList.toggle('walled', !cur.wrap);
   for (let y = 0; y < cur.h; y++) {
@@ -223,9 +305,9 @@ function startLevel(i, keepEffort = false) {
   }
 
   // スプライト
-  playerEl = makeSprite('player', '<span class="body">🐱</span>');
+  playerEl = makeSprite('player', '<span class="body">😼</span>');
   for (const b of cur.boxes) {
-    const el = makeSprite(b.kind === 'wall' ? 'wallobj' : 'box',
+    const el = makeSprite(b.kind === 'wall' ? 'wallobj' + (SAVE.wallSeen ? ' known' : '') : 'box',
       b.kind === 'wall' ? '<span class="body"></span>' : '<span class="body">📦</span>');
     boxEls.push({ el, x: b.x, y: b.y, kind: b.kind });
   }
@@ -261,10 +343,13 @@ function updateHoles() {
     el.dataset.x = o.x; el.dataset.y = o.y;
     el.style.left = (o.x * cell) + 'px';
     el.style.top = (o.y * cell) + 'px';
-    el.classList.toggle('plugged', o.plugged);
+    // 落下演出が終わるまでは、データ上は plugged でも見た目はまだ開いたまま扱う
+    // （回転演出と「埋まった」表示が重なって見えるのを防ぐ）
+    const showPlugged = o.plugged && !pendingHoleFills.has(i);
+    el.classList.toggle('plugged', showPlugged);
     el.classList.toggle('eyes', !o.plugged && cur.spawnInterval > 0 && o.counter === 1 && cur.ghosts.length < cur.ghostCap);
     let plug = el.querySelector('.plug-emoji, .plug-wall');
-    if (o.plugged && !plug) {
+    if (showPlugged && !plug) {
       if (o.pluggedBy === 'wall') {
         plug = document.createElement('span');
         plug.className = 'plug-wall';
@@ -274,8 +359,19 @@ function updateHoles() {
         plug.textContent = o.pluggedBy === 'box' ? '📦' : '👻';
       }
       el.appendChild(plug);
-    } else if (!o.plugged && plug) plug.remove();
+    } else if (!showPlugged && plug) plug.remove();
   });
+}
+
+// おばけの残像（動き元にふわっと残る）
+function ghostEcho(x, y) {
+  const d = document.createElement('div');
+  d.className = 'ghost-echo';
+  d.textContent = '👻';
+  d.style.left = (x * cell) + 'px';
+  d.style.top = (y * cell) + 'px';
+  fxEl.appendChild(d);
+  setTimeout(() => d.remove(), 420);
 }
 
 function addFx(x, y, text, cls = '') {
@@ -298,8 +394,12 @@ function input(dir, fromAuto = false) {
   if (autoplay && !fromAuto) return; // 模範解答の再生中は手入力を無視
   if (!fromAuto && ovClear.classList.contains('active')) return;
   const now = performance.now();
-  if (!fromAuto && now - lastInputAt < 70) return;
+  // 移動速度の上限（連打でもキー長押しでも同じ速さになるよう固定間隔で間引く）。
+  // 1手のスライド(.11s)と、おばけ/箱が穴に落ちる演出(最大で ばたつき.2s+落下.3s=.5s)
+  // が、次の一手が来るまでにひと呼吸ぶん進んでいるくらいの間隔を狙う。
+  if (!fromAuto && now - lastInputAt < 150) return;
   lastInputAt = now;
+  const myGen = playGen; // このターンの遅延コールバックが、後のやりなおし/undoをまたいで発火しないようにする
 
   const prevPlayer = { x: cur.player.x, y: cur.player.y };
   const { state, events, turnConsumed } = Engine.step(cur, dir);
@@ -311,13 +411,26 @@ function input(dir, fromAuto = false) {
   cur = state;
   levelEffort++;
 
+  // ぎょうれつ押し: 手前から順に「ゴン！ゴン！」と時間差で押されていく
+  const chainEvs = events.filter(e => e.what === 'ghost' && (e.type === 'push' || e.type === 'plug'));
+  const chainN = chainEvs.length;
+  const ghostMoveEvs = events.filter(e => e.type === 'ghostMove');
+  pendingStagger = chainN >= 2 ? (chainN - 1) * 85 + 260 : 0;
+  const chainDelay = (ev) => (chainN >= 2 ? (chainN - 1 - chainEvs.indexOf(ev)) * 85 : 0);
+
   // --- イベント反映 ---
   for (const ev of events) {
     switch (ev.type) {
-      case 'bonk':
+      case 'bonk': {
         Sfx.bonk();
         boardEl.classList.remove('shakeit'); void boardEl.offsetWidth; boardEl.classList.add('shakeit');
+        if (ev.what === 'wall' || ev.what === 'box') {
+          // 押せなかった対象がプルッと動く（「生きてる」手応え）
+          const sp = findBoxEl(ev.ox, ev.oy);
+          if (sp) { sp.el.classList.remove('nudge'); void sp.el.offsetWidth; sp.el.classList.add('nudge'); setTimeout(() => sp.el.classList.remove('nudge'), 250); }
+        }
         break;
+      }
       case 'scared':
         Sfx.scared();
         addFx(ev.x, ev.y, '💦');
@@ -336,7 +449,7 @@ function input(dir, fromAuto = false) {
             }, 150);
           }
         }
-        addFx(ev.tx, ev.ty, 'スカッ');
+        addFx(ev.tx, ev.ty, 'ヒョイ');
         break;
       }
       case 'walk':
@@ -344,18 +457,29 @@ function input(dir, fromAuto = false) {
         movePlayerTo(ev.x, ev.y, prevPlayer);
         break;
       case 'push': {
-        Sfx.push();
-        const sp = ev.what === 'ghost' ? findGhostEl(ev.fx, ev.fy) : findBoxEl(ev.fx, ev.fy);
-        if (sp) {
-          placeSprite(sp.el, ev.tx, ev.ty, isWrapJump(ev.fx, ev.fy, ev.tx, ev.ty));
-          sp.x = ev.tx; sp.y = ev.ty;
-          squash(sp.el);
-          if (ev.what === 'ghost') {
-            sp.el.classList.remove('dizzy'); void sp.el.offsetWidth; sp.el.classList.add('dizzy');
-            setTimeout(() => sp.el.classList.remove('dizzy'), 600);
-            addFx(ev.tx, ev.ty, '💫');
-          }
+        if (ev.what === 'wall' && !SAVE.wallSeen) {
+          // 「壁が押せる」を発見！ 以後、押せる壁にはうっすら目印が出る
+          SAVE.wallSeen = true; persist();
+          boxEls.forEach(b => { if (b.kind === 'wall') b.el.classList.add('known'); });
         }
+        const sp = ev.what === 'ghost' ? findGhostEl(ev.fx, ev.fy) : findBoxEl(ev.fx, ev.fy);
+        const delay = ev.what === 'ghost' ? chainDelay(ev) : 0;
+        const apply = () => {
+          if (ev.what === 'ghost' && chainN >= 2) Sfx.gon(chainN - 1 - chainEvs.indexOf(ev));
+          else Sfx.push();
+          if (sp && sp.x === ev.tx && sp.y === ev.ty) { // 連打で先へ進んでいたら触らない
+            placeSprite(sp.el, ev.tx, ev.ty, isWrapJump(ev.fx, ev.fy, ev.tx, ev.ty));
+            squash(sp.el);
+            if (ev.what === 'ghost') {
+              sp.el.classList.remove('wobbling');
+              sp.el.classList.remove('dizzy'); void sp.el.offsetWidth; sp.el.classList.add('dizzy');
+              setTimeout(() => sp.el.classList.remove('dizzy'), 600);
+              addFx(ev.tx, ev.ty, chainN >= 2 ? 'ゴン!' : '💫');
+            }
+          }
+        };
+        if (sp) { sp.x = ev.tx; sp.y = ev.ty; } // 論理座標は即時更新（後続イベントの検索用）
+        if (delay > 0) setTimeout(apply, delay); else apply();
         movePlayerTo(ev.fx, ev.fy, prevPlayer);
         break;
       }
@@ -366,30 +490,66 @@ function input(dir, fromAuto = false) {
         break; // 穴タイル自体は updateHoles() が新しい位置へ動かす
       }
       case 'plug': {
-        Sfx.push(); Sfx.plug();
         const px = ev.x, py = ev.y;
         // 押し元スプライト（落ちる直前の位置 = ev.fx/fy）
         const sp = ev.what === 'ghost' ? findGhostEl(ev.fx, ev.fy) : findBoxEl(ev.fx, ev.fy);
         if (sp) {
-          placeSprite(sp.el, px, py, isWrapJump(sp.x, sp.y, px, py));
-          sp.el.style.transition = 'transform .11s ease-out, opacity .3s .1s, scale .3s .1s';
-          sp.el.style.opacity = '0';
-          sp.el.style.scale = '0.4';
-          const el = sp.el;
-          setTimeout(() => el.remove(), 450);
           if (ev.what === 'ghost') ghostEls.splice(ghostEls.indexOf(sp), 1);
           else boxEls.splice(boxEls.indexOf(sp), 1);
         }
+        // 落下演出が終わるまで、この穴の「埋まった」見た目を保留する
+        // （そうしないと、この直後 input() 末尾の毎ターンupdateHoles()が
+        // 演出を待たずに即座に埋まった表示を出してしまう）
+        const holeIdx = sp ? cur.holes.findIndex(o => o.x === px && o.y === py) : -1;
+        if (holeIdx >= 0) pendingHoleFills.add(holeIdx);
+        const delay = ev.what === 'ghost' ? chainDelay(ev) : 0;
+        const apply = () => {
+          if (ev.what === 'ghost' && chainN >= 2) Sfx.gon(chainN - 1 - chainEvs.indexOf(ev));
+          else Sfx.push();
+          Sfx.plug();
+          // 落下演出が完全に終わってから穴を「埋まった」見た目に切り替える
+          // （演出中に埋まった穴と重なって見えるのを防ぐ）。演出自体（classList操作・
+          // 要素削除）は、やりなおし等で要素が既にDOMから外れていても無害なので
+          // ここでは進めて良い。危険なのは共有状態 pendingHoleFills の書き換えだけ
+          // なので、そこだけ世代を照合してガードする。
+          if (sp) {
+            placeSprite(sp.el, px, py, isWrapJump(sp.x, sp.y, px, py));
+            const el = sp.el;
+            // 箱・壁・おばけ共通で、落ちる前に0.5秒ぐるぐる回ってから続けて落ちる
+            Sfx.wobble();
+            el.classList.add('wobbling');
+            if (ev.what === 'ghost') addFx(px, py, 'ウワッ', 'rise');
+            setTimeout(() => {
+              el.classList.remove('wobbling');
+              el.classList.add('falling');
+              setTimeout(() => {
+                el.remove();
+                if (holeIdx >= 0 && myGen === playGen) { pendingHoleFills.delete(holeIdx); updateHoles(); }
+              }, 150);
+            }, 500);
+          } else {
+            updateHoles();
+          }
+          if (ev.what !== 'ghost') addFx(px, py, '✨', 'pop tiny');
+        };
+        if (delay > 0) setTimeout(apply, delay); else apply();
         // プレイヤーは押し込んだ位置へ
         const me = cur.player;
         movePlayerTo(me.x, me.y, prevPlayer);
-        addFx(px, py, ev.what === 'ghost' ? '💜' : '✨', 'pop');
-        setTimeout(updateHoles, 200);
         break;
       }
       case 'ghostMove': {
         const sp = findGhostEl(ev.fx, ev.fy);
-        if (sp) { placeSprite(sp.el, ev.tx, ev.ty, isWrapJump(ev.fx, ev.fy, ev.tx, ev.ty)); sp.x = ev.tx; sp.y = ev.ty; }
+        if (!sp) break;
+        sp.x = ev.tx; sp.y = ev.ty; // 論理座標は即時更新
+        const gi = ghostMoveEvs.indexOf(ev);
+        const delay = ghostMoveEvs.length >= 2 ? gi * 50 : 0; // 複数いるときは時間差で順に
+        const apply = () => {
+          if (!ghostEls.includes(sp) || sp.x !== ev.tx || sp.y !== ev.ty) return;
+          ghostEcho(ev.fx, ev.fy); // 残像で「どこから動いたか」を見せる
+          placeSprite(sp.el, ev.tx, ev.ty, isWrapJump(ev.fx, ev.fy, ev.tx, ev.ty));
+        };
+        if (delay > 0) setTimeout(apply, delay); else apply();
         break;
       }
       case 'spawn': {
@@ -411,7 +571,8 @@ function input(dir, fromAuto = false) {
     }
   }
   updateHud();
-  updateHoles();
+  if (pendingStagger > 0) setTimeout(updateHoles, pendingStagger + 120); else updateHoles();
+  updateCamera();
   maybeWhisper();
   scheduleDeadlockCheck();
 }
@@ -429,25 +590,60 @@ function movePlayerTo(x, y, prev) {
 let deadlockTimer = null;
 let deadlockShown = false;
 let lastCheckedKey = '';
+let dlJob = null; // 毎ターン走る分割BFSジョブ（フレームを止めない）
 function scheduleDeadlockCheck() {
   if (deadlockTimer) clearTimeout(deadlockTimer);
-  deadlockTimer = setTimeout(runDeadlockCheck, 750);
+  dlJob = null; // 古いジョブは破棄
+  deadlockTimer = setTimeout(startDeadlockJob, 250);
 }
-function runDeadlockCheck() {
+function startDeadlockJob() {
   deadlockTimer = null;
   if (!cur || cur.status !== 'playing' || ended || autoplay || cur.turn === 0) return;
   const key = Engine.serialize(cur);
   if (key === lastCheckedKey) return;
   lastCheckedKey = key;
-  const res = solvableWithin(cur, 25000);
-  if (res === 'unsolvable') {
-    deadlockShown = true;
-    $('whisper').textContent = '💭 ……これは、もう ふさげない かたち かも。（Z でもどる / R でやりなおす）';
-    $('whisper').classList.add('show');
-  } else if (deadlockShown) {
-    deadlockShown = false;
-    $('whisper').classList.remove('show');
+  dlJob = { seen: new Set([key]), frontier: [cur], next: [], baseKey: key };
+  pumpDeadlockJob();
+}
+function pumpDeadlockJob() {
+  if (!dlJob) return;
+  if (!cur || cur.status !== 'playing' || ended || Engine.serialize(cur) !== dlJob.baseKey) { dlJob = null; return; }
+  const dirs = ['up', 'down', 'left', 'right', 'wait'];
+  const t0 = performance.now();
+  while (performance.now() - t0 < 11) { // 1スライス約11ms
+    if (!dlJob.frontier.length) {
+      if (!dlJob.next.length) { dlJob = null; showDeadlockWhisper(); return; } // 全探索し尽くし=詰み証明
+      dlJob.frontier = dlJob.next; dlJob.next = [];
+    }
+    const s0 = dlJob.frontier.pop();
+    for (const d of dirs) {
+      const { state, turnConsumed } = Engine.step(s0, d);
+      if (!turnConsumed) continue;
+      if (state.status === 'clear') {
+        dlJob = null;
+        if (deadlockShown) hideDeadlockOverlay();
+        return;
+      }
+      const k = Engine.serialize(state);
+      if (dlJob.seen.has(k)) continue;
+      dlJob.seen.add(k);
+      if (dlJob.seen.size > 220000) { dlJob = null; return; } // 予算切れ=沈黙（誤報しない）
+      dlJob.next.push(state);
+    }
   }
+  setTimeout(pumpDeadlockJob, 40);
+}
+function showDeadlockWhisper() {
+  deadlockShown = true;
+  const w = $('whisper');
+  w.textContent = '⚠️ もう ふさげないかも……？ Z で もどるか、R で やりなおそう。';
+  w.classList.add('show', 'danger');
+}
+function hideDeadlockOverlay() {
+  deadlockShown = false;
+  const w = $('whisper');
+  w.classList.remove('show', 'danger');
+  w.textContent = ''; // danger は base の .8s フェードを使うため、文字も即座に消して残像を防ぐ
 }
 function solvableWithin(start, maxStates) {
   const dirs = ['up', 'down', 'left', 'right', 'wait'];
@@ -487,7 +683,7 @@ function undo() {
   stopAutoplay();
   cur = undoStack.pop();
   refreshFromState();
-  if (deadlockShown) { deadlockShown = false; $('whisper').classList.remove('show'); }
+  if (deadlockShown) hideDeadlockOverlay();
   lastCheckedKey = '';
   scheduleDeadlockCheck();
   Sfx.menu();
@@ -500,34 +696,137 @@ function retry() {
   startLevel(levelIndex, true);
 }
 
-/* ============ 模範解答の自動再生（ギブアップ） ============ */
+/* ============ 模範解答の自動再生（ギブアップ） ============
+ * まず「いまの状態から」解こうとする（予算つきBFS→ダメならグリーディ段階探索）。
+ * ここから解けないことが証明されたら赤警告。探索が間に合わない巨大局面だけ最初から再生。
+ */
 function stopAutoplay() {
   if (autoplay) { clearInterval(autoplay); autoplay = null; }
 }
 function playSolution() {
   if (ended || !cur) return;
-  if (autoplay) { stopAutoplay(); return; } // もう一度押すと中断
-  const lv = LEVELS[levelIndex];
-  const path = SOLUTIONS[lv.id];
-  if (!path || !path.length) return;
-  startLevel(levelIndex, true); // 最初から再生
-  $('whisper').textContent = '💡 こたえを さいせいちゅう…（R で ちゅうだん）';
-  $('whisper').classList.add('show');
-  let i = 0;
-  autoplay = setInterval(() => {
-    if (i >= path.length || !cur || cur.status !== 'playing') { stopAutoplay(); return; }
-    input(path[i++], true);
-  }, 180);
+  if (autoplay) { stopAutoplay(); $('whisper').classList.remove('show'); return; } // もう一度押すと中断
+  const w = $('whisper');
+  w.classList.remove('danger');
+  w.textContent = '💭 かんがえちゅう……';
+  w.classList.add('show');
+  setTimeout(() => {
+    const lv = LEVELS[levelIndex];
+    let path = null, fromHere = false;
+    if (cur.status === 'playing' && cur.turn > 0) {
+      const found = findPathFrom(cur);
+      if (found === 'unsolvable') { showDeadlockWhisper(); return; }
+      if (found && found.path) { path = found.path; fromHere = true; }
+    }
+    if (!path) {
+      const sol = SOLUTIONS[lv.id];
+      if (!sol || !sol.path || !sol.path.length) { w.classList.remove('show'); return; }
+      path = sol.path;
+      startLevel(levelIndex, true); // ここからは探索しきれない → 最初から再生
+    }
+    w.textContent = fromHere
+      ? '💡 ここから こたえを さいせい…（もういちど💡 か R で ちゅうだん）'
+      : '💡 さいしょから こたえを さいせい…（もういちど💡 か R で ちゅうだん）';
+    w.classList.add('show');
+    let i = 0;
+    autoplay = setInterval(() => {
+      if (i >= path.length || !cur || cur.status !== 'playing') { stopAutoplay(); return; }
+      input(path[i++], true);
+    }, 280);
+  }, 60);
+}
+
+// 現在の状態から解く: 予算つき BFS（最短）→ 爆発したらグリーディ段階探索（witness）
+function findPathFrom(start) {
+  const dirs = ['up', 'down', 'left', 'right', 'wait'];
+  let seen = new Set([Engine.serialize(start)]);
+  let frontier = [{ s: start, path: [] }];
+  let exploded = false;
+  while (frontier.length && !exploded) {
+    const next = [];
+    for (const node of frontier) {
+      for (const d of dirs) {
+        const { state, turnConsumed } = Engine.step(node.s, d);
+        if (!turnConsumed) continue;
+        if (state.status === 'clear') return { path: [...node.path, d] };
+        const k = Engine.serialize(state);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        if (seen.size > 120000) { exploded = true; break; }
+        next.push({ s: state, path: [...node.path, d] });
+      }
+      if (exploded) break;
+    }
+    frontier = next;
+  }
+  if (!exploded) return 'unsolvable'; // 全探索し尽くした＝ここからは詰み
+  // グリーディ: 「穴がもう1つ塞がる」までを繰り返す
+  let s = start; const full = []; const t0 = performance.now();
+  for (let stage = 0; stage < 40; stage++) {
+    if (performance.now() - t0 > 5000) return null;
+    const plugged0 = s.holes.filter(o => o.plugged).length;
+    let seen2 = new Set([Engine.serialize(s)]);
+    let fr = [{ s, path: [] }];
+    let found = null, bail = false;
+    while (fr.length && !found && !bail) {
+      const nx = [];
+      for (const node of fr) {
+        for (const d of dirs) {
+          const { state, turnConsumed } = Engine.step(node.s, d);
+          if (!turnConsumed) continue;
+          const k = Engine.serialize(state);
+          if (seen2.has(k)) continue;
+          seen2.add(k);
+          const p = [...node.path, d];
+          const plugged = state.holes.filter(o => o.plugged).length;
+          if (state.status === 'clear' || plugged > plugged0) { found = { state, p }; break; }
+          if (seen2.size > 150000) { bail = true; break; }
+          nx.push({ s: state, path: p });
+        }
+        if (found || bail) break;
+      }
+      if (!found) fr = nx;
+      if (!fr.length && !found && !bail) return 'unsolvable'; // 栓を増やせる未来が存在しない
+    }
+    if (bail || !found) return null;
+    full.push(...found.p);
+    s = found.state;
+    if (s.status === 'clear') return { path: full };
+  }
+  return null;
+}
+
+/* ============ ★ランク ============ */
+function parOf(id) { const s = SOLUTIONS[id]; return s && s.par ? s.par : null; }
+function starsForTurns(par, turns) {
+  if (!par || turns == null) return 1;
+  if (turns <= par + 2) return 3;
+  if (turns <= par + 10) return 2;
+  return 1;
+}
+// レベル選択画面などで使う「歴代ベスト」基準の★
+function starsFor(id) {
+  if (!SAVE.cleared[id]) return 0;
+  const best = SAVE.best[id];
+  if (!best) return 1;
+  return starsForTurns(parOf(id), best);
+}
+function starStr(n) { return n > 0 ? '★'.repeat(n) + '☆'.repeat(3 - n) : ''; }
+function isPerfectCleared(id) {
+  const par = parOf(id);
+  const best = SAVE.best[id];
+  return !!(SAVE.cleared[id] && par && best != null && best <= par);
 }
 
 // Undo 用: 状態からスプライトを作り直す（アニメなし）
 function refreshFromState() {
+  playGen++;
   objsEl.innerHTML = '';
-  boxEls = []; ghostEls = [];
-  playerEl = makeSprite('player', '<span class="body">🐱</span>');
+  boxEls = []; ghostEls = []; pendingHoleFills = new Set();
+  playerEl = makeSprite('player', '<span class="body">😼</span>');
   placeSprite(playerEl, cur.player.x, cur.player.y, true);
   for (const b of cur.boxes) {
-    const el = makeSprite(b.kind === 'wall' ? 'wallobj' : 'box',
+    const el = makeSprite(b.kind === 'wall' ? 'wallobj' + (SAVE.wallSeen ? ' known' : '') : 'box',
       b.kind === 'wall' ? '<span class="body"></span>' : '<span class="body">📦</span>');
     placeSprite(el, b.x, b.y, true);
     boxEls.push({ el, x: b.x, y: b.y, kind: b.kind });
@@ -539,6 +838,7 @@ function refreshFromState() {
   }
   updateHud();
   updateHoles();
+  updateCamera(true);
 }
 
 /* ============ クリア・エンディング ============ */
@@ -546,26 +846,50 @@ function onClear() {
   stopAutoplay();
   const lv = LEVELS[levelIndex];
   SAVE.cleared[lv.id] = true;
+  if (!SAVE.best[lv.id] || cur.turn < SAVE.best[lv.id]) SAVE.best[lv.id] = cur.turn;
   persist();
   Sfx.clear();
+  Sfx.duckFor(2800); // BGM は止めずに音量だけ下げる
+  // 最後に埋まった穴の落下演出(最長でスピン.5s+落下.15s=.65s)が終わってから、
+  // 埋まった穴を0.5秒ほど見せてからクリア表示を出す
+  const wait = 650 + 500 + pendingStagger;
   if (lv.finale) {
-    setTimeout(playEnding, 900);
+    setTimeout(playEnding, 900 + pendingStagger);
     return;
   }
-  $('clear-desc').textContent = `${lv.time} 「${lv.name}」 — ${cur.turn} てで ふさいだ`;
+  const par = parOf(lv.id);
+  const stars = starsForTurns(par, cur.turn); // 今回のクリア手数基準（歴代ベストは別途レベル選択で表示）
+  const isPerfect = par && cur.turn <= par; // ソルバーの最短(以下)で塞いだ
+  // ★は1つずつ ぽん、ぽん、と出てくる
+  const box = $('clear-stars');
+  box.innerHTML = '';
+  for (let i = 0; i < 3; i++) {
+    const sp = document.createElement('span');
+    sp.className = 'star-pop ' + (i < stars ? 'lit' : 'dim');
+    sp.textContent = i < stars ? '★' : '☆';
+    sp.style.animationDelay = (0.15 + i * 0.3) + 's';
+    box.appendChild(sp);
+  }
+  for (let i = 0; i < stars; i++) setTimeout(() => Sfx.starTick(i), wait + 150 + i * 300);
+  const perfectEl = $('clear-perfect');
+  perfectEl.innerHTML = isPerfect ? '<span class="psp">✦</span><span class="ptxt">Perfect!</span><span class="psp">✦</span>' : '';
+  if (isPerfect) setTimeout(() => Sfx.perfect(), wait + 100);
+  $('clear-desc').textContent =
+    `${lv.time} 「${lv.name}」 — ${cur.turn} てで ふさいだ` + (par ? `（さいたん ${par} て）` : '');
   $('btn-next').style.display = levelIndex + 1 < LEVELS.length ? '' : 'none';
-  clearOvTimer = setTimeout(() => { clearOvTimer = null; ovClear.classList.add('active'); }, 650);
+  clearOvTimer = setTimeout(() => { clearOvTimer = null; ovClear.classList.add('active'); }, wait);
 }
 
 const ENDING_LINES = [
-  { t: 'すべての あなを ふさいだ。', em: false },
+  { t: 'すべての あなを ふさいだ！', em: false },
+  { t: '🎉🎊✨🎊🎉', em: true },
   { t: 'そうこは、しずかに なった。', em: false },
-  { t: '🐱', em: true },
-  { t: '……ちょっとだけ、しずかすぎる。', em: false },
+  { t: '😼', em: true },
   { t: '『 また こんど、あそぼうね 』', em: false, ghost: true },
-  { t: 'とおくで、あさの おとが する。', em: false },
-  { t: '🌅', em: true },
-  { t: '― あなふさぎのよる ・ おしまい ―', em: false },
+  { t: '……べつに、さみしくないし。', em: false },
+  { t: 'あさひが のぼる。バイト、かんりょう。', em: false },
+  { t: '🌅🎆🌅', em: true },
+  { t: '― ワルぶるネコのよる ・ おしまい ―', em: false },
 ];
 let endingStep = 0;
 let endingTimer = null;
@@ -578,16 +902,32 @@ function playEnding() {
   $('btn-ending-done').style.display = 'none';
   $('ending-skip').style.display = '';
   endingStep = 0;
-  ENDING_LINES.forEach(line => {
+  const total = LEVELS.reduce((a, lv) => a + starsFor(lv.id), 0);
+  const lines = [...ENDING_LINES, { t: `よるの せいか: ★×${total}（さいだい ${LEVELS.length * 3}）`, em: false }];
+  lines.forEach(line => {
     const d = document.createElement('div');
     d.className = 'line' + (line.em ? ' em' : '');
     d.textContent = line.t;
     if (line.ghost) d.style.color = '#c9a6ff';
     wrap.appendChild(d);
   });
+  // 花火
+  const old = screens.ending.querySelectorAll('.fw');
+  old.forEach(o => o.remove());
+  const FW = ['🎆', '✨', '🎉', '⭐', '💛', '🎊'];
+  for (let i = 0; i < 26; i++) {
+    const f = document.createElement('span');
+    f.className = 'fw';
+    f.textContent = FW[i % FW.length];
+    f.style.left = (5 + Math.random() * 90) + '%';
+    f.style.top = (5 + Math.random() * 80) + '%';
+    f.style.animationDelay = (Math.random() * 2.4).toFixed(2) + 's';
+    f.style.fontSize = (16 + Math.random() * 22) + 'px';
+    screens.ending.appendChild(f);
+  }
   screens.ending.classList.add('dawn');
   advanceEnding();
-  endingTimer = setInterval(advanceEnding, 1900); // タップでも進められる
+  endingTimer = setInterval(advanceEnding, 1700); // タップでも進められる
 }
 function advanceEnding() {
   if (!ended) return;
@@ -630,10 +970,27 @@ document.addEventListener('keydown', (e) => {
   if (k === 'm') { toggleMute(); return; }
 
   if (active === 'title') {
-    if (k === 'enter' || k === ' ') { e.preventDefault(); Sfx.menu(); continueGame(); }
+    if (k === 'arrowup' || k === 'w') { e.preventDefault(); titleIndex--; updateTitleFocus(); Sfx.menu(); return; }
+    if (k === 'arrowdown' || k === 's') { e.preventDefault(); titleIndex++; updateTitleFocus(); Sfx.menu(); return; }
+    if (k === 'enter' || k === ' ') {
+      e.preventDefault();
+      const btn = titleButtons()[titleIndex];
+      if (btn) btn.click();
+    }
     return;
   }
   if (active === 'select') {
+    const COLS = 3;
+    if (k === 'arrowleft' || k === 'a') { e.preventDefault(); selIndex--; updateSelectFocus(); Sfx.menu(); return; }
+    if (k === 'arrowright' || k === 'd') { e.preventDefault(); selIndex++; updateSelectFocus(); Sfx.menu(); return; }
+    if (k === 'arrowup' || k === 'w') { e.preventDefault(); selIndex -= COLS; updateSelectFocus(); Sfx.menu(); return; }
+    if (k === 'arrowdown' || k === 's') { e.preventDefault(); selIndex += COLS; updateSelectFocus(); Sfx.menu(); return; }
+    if (k === 'enter' || k === ' ') {
+      e.preventDefault();
+      const card = selCards[selIndex];
+      if (card && !card.classList.contains('locked')) card.click();
+      return;
+    }
     if (k === 'escape') { Sfx.menu(); showScreen('title'); }
     return;
   }
@@ -641,12 +998,13 @@ document.addEventListener('keydown', (e) => {
 
   // オーバーレイ
   if (ovClear.classList.contains('active')) {
-    if (k === 'enter' || k === ' ') {
+    if (k === 'escape') { e.preventDefault(); gotoSelect(); return; }
+    if (k === 'enter' || k === ' ' || KEY_DIRS[k]) {
       e.preventDefault();
       if (levelIndex + 1 < LEVELS.length) { startLevel(levelIndex + 1); } else { gotoSelect(); }
+      return;
     }
     if (k === 'r') { e.preventDefault(); retry(); }
-    if (k === 'escape') { e.preventDefault(); gotoSelect(); }
     return;
   }
 
@@ -690,7 +1048,8 @@ document.querySelectorAll('.dbtn').forEach(b => {
 });
 
 /* ボタン */
-$('btn-start').addEventListener('click', () => { Sfx.init(); Sfx.menu(); continueGame(); });
+$('btn-continue').addEventListener('click', () => { Sfx.init(); Sfx.menu(); continueGame(); });
+$('btn-newgame').addEventListener('click', () => { Sfx.init(); Sfx.menu(); startLevel(0); });
 $('btn-select').addEventListener('click', () => { Sfx.init(); gotoSelect(); });
 $('select-back').addEventListener('click', () => { Sfx.menu(); showScreen('title'); });
 $('btn-levels').addEventListener('click', gotoSelect);
