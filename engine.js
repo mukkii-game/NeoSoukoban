@@ -50,7 +50,7 @@
         else if (ch === '.') { /* floor */ }
         else if (ch === 'P') s.player = { x, y };
         else if (ch === 'B') s.boxes.push({ x, y, kind: 'box' });
-        else if (ch === 'G') s.ghosts.push({ x, y, stun: 0, momentum: null });
+        else if (ch === 'G') s.ghosts.push({ x, y, stun: 0, momentum: null, wobbling: false });
         else if (ch === 'O') s.holes.push({ x, y, plugged: false, pluggedBy: null, counter: level.spawnInterval || 0, spawned: false });
         else throw new Error(level.name + ': unknown map char "' + ch + '"');
       }
@@ -71,7 +71,7 @@
       holes: s.holes.map(o => ({ x: o.x, y: o.y, plugged: o.plugged, pluggedBy: o.pluggedBy, counter: o.counter, spawned: o.spawned })),
       player: { x: s.player.x, y: s.player.y },
       boxes: s.boxes.map(b => ({ x: b.x, y: b.y, kind: b.kind })),
-      ghosts: s.ghosts.map(g => ({ x: g.x, y: g.y, stun: g.stun, momentum: g.momentum })),
+      ghosts: s.ghosts.map(g => ({ x: g.x, y: g.y, stun: g.stun, momentum: g.momentum, wobbling: !!g.wobbling })),
       turn: s.turn, status: s.status, lastAxis: s.lastAxis,
     };
   }
@@ -154,8 +154,11 @@
   // 単体は、まだ勢いがついているとみなしてよけない＝連打・長押しし続ける限り
   // 列がちぎれても最後の1体まで押し込める。方向を変えたり1手でも他のことを
   // すると勢いは失われ、次に押されたときはまた素直によける。
+  // touchedWobble: このターンに動かされた（ばたばた判定を再評価された）子の集合。
+  // ターン末尾の確定スイープで「前ターンからばたついていたが今ターンは
+  // 触られなかった子」だけを確定させるために使う。
   // 戻り値: { blocked:true, cx, cy } / { dodge:true } / { moved:true }
-  function pushGhostChain(s, events, ghost, dx, dy, dirName, soloAlwaysDodges, hadMomentum) {
+  function pushGhostChain(s, events, ghost, dx, dy, dirName, soloAlwaysDodges, hadMomentum, touchedWobble) {
     const chain = [ghost];
     let cx = ghost.x, cy = ghost.y, loop = false;
     while (true) {
@@ -171,27 +174,42 @@
         (cx === s.player.x && cy === s.player.y)) {
       return { blocked: true, cx, cy };
     }
-    if (chain.length === 1 && soloAlwaysDodges && hadMomentum.get(ghost) !== dirName) {
+    if (chain.length === 1 && soloAlwaysDodges && !ghost.wobbling && hadMomentum.get(ghost) !== dirName) {
       // 単体のおばけは、押し手の後ろが空いていれば必ずよけて戻る
-      // （逃げ場がなくなる＝2体以上の連結か、箱に押された場合、または
-      // 直前ターンからの勢いが残っている場合だけ捕まる）。
+      // （逃げ場がなくなる＝2体以上の連結か、箱に押された場合、既にばたばた中、
+      // または直前ターンからの勢いが残っている場合だけ捕まる）。
       ghost.stun = 1; // よけるのに精一杯で、このターンは動けない
       events.push({ type: 'dodge', x: ghost.x, y: ghost.y, dx, dy, tx: cx, ty: cy });
       return { dodge: true };
     }
-    // 遠い側から順に1マスずつ進める（列の先頭1体だけがその穴を塞ぐ。他は1マス詰めるだけ）
+    // 遠い側から順に1マスずつ進める。各メンバーの行き先が開いた穴なら、
+    // その先にも穴が連続している（＝連結2体以上でさらに奥へ伸ばせる）か、
+    // もしくは自分が既にばたばた中（前ターンからの続き）なら即プラグせず
+    // 「ばたばた」状態で足踏みする（次のターンに動かされなければ確定して落ちる）。
+    // それ以外（孤立した穴、または単体の即席キャッチ）は従来どおり即プラグ。
     for (let i = chain.length - 1; i >= 0; i--) {
       const g = chain[i];
-      const n = cellInDir(s, g.x, g.y, dx, dy);
-      if (i === chain.length - 1 && hole) {
-        hole.plugged = true; hole.pluggedBy = 'ghost';
-        s.ghosts.splice(s.ghosts.indexOf(g), 1);
-        events.push({ type: 'plug', x: n.x, y: n.y, what: 'ghost', fx: g.x, fy: g.y });
+      const fx = g.x, fy = g.y;
+      const n = cellInDir(s, fx, fy, dx, dy);
+      const h = openHoleAt(s, n.x, n.y);
+      g.x = n.x; g.y = n.y;
+      g.stun = 1; // 押されたおばけは目を回してこのターン動けない
+      touchedWobble.add(g);
+      if (h) {
+        const beyond = cellInDir(s, n.x, n.y, dx, dy);
+        const extendable = chain.length >= 2 && !!openHoleAt(s, beyond.x, beyond.y);
+        if (g.wobbling || extendable) {
+          g.wobbling = true;
+          events.push({ type: 'land', what: 'ghost', fx, fy, tx: n.x, ty: n.y });
+        } else {
+          h.plugged = true; h.pluggedBy = 'ghost';
+          s.ghosts.splice(s.ghosts.indexOf(g), 1);
+          events.push({ type: 'plug', x: n.x, y: n.y, what: 'ghost', fx, fy });
+        }
       } else {
-        events.push({ type: 'push', what: 'ghost', fx: g.x, fy: g.y, tx: n.x, ty: n.y });
-        g.x = n.x; g.y = n.y;
-        g.stun = 1; // 押されたおばけは目を回してこのターン動けない
+        g.wobbling = false;
         g.momentum = dirName; // 次のターンも同方向に押され続ければ、よけずに済む
+        events.push({ type: 'push', what: 'ghost', fx, fy, tx: n.x, ty: n.y });
       }
     }
     return { moved: true };
@@ -212,6 +230,10 @@
     // （このターンに押された子だけ、末尾で改めてセットし直す）
     const hadMomentum = new Map();
     for (const g of s.ghosts) { if (g.momentum) hadMomentum.set(g, g.momentum); g.momentum = null; }
+    // ばたばた（穴に乗ったがまだ確定していない）おばけの、今ターン開始時点の一覧と、
+    // 今ターンに動かされた(押された)ものの一覧
+    const wasWobbling = new Set(s.ghosts.filter(g => g.wobbling));
+    const touchedWobble = new Set();
 
     // --- 1) プレイヤーフェイズ ---
     if (dir === 'wait') {
@@ -236,7 +258,7 @@
           if (!s.rules.ghostPush) {
             fail('bonk', u.x, u.y, { what: box.kind, ox: t.x, oy: t.y });
           } else {
-            const result = pushGhostChain(s, events, blockingGhost, dx, dy, dir, false, hadMomentum);
+            const result = pushGhostChain(s, events, blockingGhost, dx, dy, dir, false, hadMomentum, touchedWobble);
             if (result.blocked) {
               fail('bonk', result.cx, result.cy, { what: box.kind, ox: t.x, oy: t.y });
             } else {
@@ -263,7 +285,7 @@
         if (!s.rules.ghostPush) {
           fail('bonk', t.x, t.y);
         } else {
-          const result = pushGhostChain(s, events, ghost, dx, dy, dir, true, hadMomentum);
+          const result = pushGhostChain(s, events, ghost, dx, dy, dir, true, hadMomentum, touchedWobble);
           if (result.blocked) {
             fail('bonk', result.cx, result.cy);
           } else if (result.moved) {
@@ -296,6 +318,19 @@
       s.lastAxis = dx !== 0 ? 'h' : 'v';
     }
 
+    // --- 1b) ばたばた確定スイープ: 前ターンからばたついていて、今ターン
+    // 動かされなかった子はここで確定して落ちる。
+    for (const g of s.ghosts.slice()) {
+      if (g.wobbling && wasWobbling.has(g) && !touchedWobble.has(g)) {
+        const h = holeAt(s, g.x, g.y);
+        if (h && !h.plugged) {
+          h.plugged = true; h.pluggedBy = 'ghost';
+          s.ghosts.splice(s.ghosts.indexOf(g), 1);
+          events.push({ type: 'plug', x: g.x, y: g.y, what: 'ghost', fx: g.x, fy: g.y });
+        }
+      }
+    }
+
     s.turn++;
 
     // --- 2) クリア判定（最後の穴を塞いだ瞬間に勝ち。おばけは動かない） ---
@@ -315,6 +350,7 @@
     const acted = new Set();
     for (const g of s.ghosts) {
       if (g.stun > 0) { g.stun--; acted.add(g); events.push({ type: 'dizzy', x: g.x, y: g.y }); }
+      if (g.wobbling) acted.add(g); // ばたばた中は自分から動かない（押されたときだけ動く）
     }
     const dist = (x1, y1, x2, y2) =>
       Math.abs(signedDelta(x1, x2, s.w, s.wrap)) + Math.abs(signedDelta(y1, y2, s.h, s.wrap));
@@ -383,7 +419,7 @@
         if (o.counter <= 0) {
           if (s.ghosts.length < s.ghostCap && !occupied(s, o.x, o.y) &&
               !(s.player.x === o.x && s.player.y === o.y)) {
-            s.ghosts.push({ x: o.x, y: o.y, stun: 0, momentum: null }); // 湧いたターンは動かない
+            s.ghosts.push({ x: o.x, y: o.y, stun: 0, momentum: null, wobbling: false }); // 湧いたターンは動かない
             o.counter = s.spawnInterval;
             o.spawned = true;
             events.push({ type: 'spawn', x: o.x, y: o.y });
@@ -399,7 +435,7 @@
   // ソルバー用: 状態の正規化キー（turn は含めない）
   function serialize(s) {
     const boxes = s.boxes.map(b => b.kind[0] + b.x + ',' + b.y).sort().join('|');
-    const ghosts = s.ghosts.map(g => g.x + ',' + g.y + (g.stun ? '*' : '') + (g.momentum ? 'm' + g.momentum[0] : '')).sort().join('|');
+    const ghosts = s.ghosts.map(g => g.x + ',' + g.y + (g.stun ? '*' : '') + (g.momentum ? 'm' + g.momentum[0] : '') + (g.wobbling ? 'w' : '')).sort().join('|');
     const holes = s.holes.map(o => o.x + ',' + o.y + ':' + (o.plugged ? 'X' : o.counter) + (o.spawned ? 's' : '')).join('|');
     return s.player.x + ',' + s.player.y + ';' + boxes + ';' + ghosts + ';' + holes + ';' + s.lastAxis;
   }

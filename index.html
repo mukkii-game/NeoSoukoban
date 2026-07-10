@@ -206,10 +206,12 @@
     animation:echoFade .4s ease-out forwards;
   }
   @keyframes echoFade { 0%{opacity:.45; transform:scale(1)} 100%{opacity:0; transform:scale(.75)} }
-  .sprite.ghost.dodging .body { animation:dodgeWiggle .35s ease-out; }
-  @keyframes dodgeWiggle {
-    0%{transform:translateX(0)} 30%{transform:translateX(26%) rotate(9deg) scaleX(.9)}
-    65%{transform:translateX(-14%) rotate(-6deg)} 100%{transform:translateX(0)}
+  .sprite.ghost.dodging { z-index:6; }
+  .sprite.ghost.dodging .body { animation:dodgeSpring .26s cubic-bezier(.32,1.6,.4,1); }
+  @keyframes dodgeSpring {
+    0%{transform:rotate(0) scale(1,1)}
+    40%{transform:rotate(var(--leanDeg,12deg)) scale(.92,1.06)}
+    100%{transform:rotate(0) scale(1,1)}
   }
   .sprite.ghost.dizzy .body { animation:dizzySpin .55s ease-out; }
   @keyframes dizzySpin { 0%{transform:rotate(0) scale(1.1)} 60%{transform:rotate(340deg)} 100%{transform:rotate(360deg) scale(1)} }
@@ -242,7 +244,7 @@
     100%{opacity:0; transform:translate(-20%,-20%) scale(1.1)}
   }
   .fx.rise { animation:fxRise .65s ease-out forwards; }
-  @keyframes fxRise { 0%{opacity:1; transform:translate(0,0) scale(1)} 100%{opacity:0; transform:translate(12%,-85%) scale(1.05)} }
+  @keyframes fxRise { 0%{opacity:1; transform:translate(0,0) scale(1)} 100%{opacity:0; transform:translate(16%,-140%) scale(1.3)} }
   .fx.pop { animation:fxPop .5s ease-out forwards; }
   @keyframes fxPop { 0%{opacity:.9; transform:scale(.4)} 60%{opacity:1; transform:scale(1.2)} 100%{opacity:0; transform:scale(1.35)} }
 
