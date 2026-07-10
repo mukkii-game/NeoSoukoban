@@ -130,9 +130,9 @@ let allOk = true;
 for (const level of LEVELS) {
   if (only && level.id !== only) continue;
   const t0 = Date.now();
-  let res = solve(level);
-  if (!res.solved && res.reason === 'state-explosion') {
-    console.log(`   … ${level.id}: BFS爆発(${res.states}) → グリーディ探索に切替`);
+  let res = solve(level, {}, { deadlineMs: 60_000 });
+  if (!res.solved && (res.reason === 'state-explosion' || res.reason === 'timeout')) {
+    console.log(`   … ${level.id}: BFS${res.reason === 'timeout' ? 'タイムアウト' : '爆発'}(${res.states}) → グリーディ探索に切替`);
     res = greedySolve(level);
   }
   const ms = Date.now() - t0;
