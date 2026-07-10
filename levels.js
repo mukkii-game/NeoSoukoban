@@ -120,7 +120,7 @@
     },
     {
       id: 'n07', time: 'AM 0:00', name: 'とびでてじゃじゃーん',
-      spawnInterval: 6, ghostCap: 2, spawnOnce: true,
+      spawnInterval: 3, ghostCap: 2, spawnOnce: true,
       // 箱1個で両方の穴をまかなう（n06と同じ希少性）。単体のおばけは
       // 直接押してもよけるだけなので、箱で押して戻り道をふさぎ、
       // 出てきた穴へ押し戻す。
