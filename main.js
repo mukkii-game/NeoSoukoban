@@ -924,14 +924,24 @@ function onClear() {
   persist();
   Sfx.clear();
   Sfx.duckFor(2800); // BGM は止めずに音量だけ下げる
-  poofRemainingGhosts(); // 穴に落ちず残ったおばけがいたら、しゅんと消しておく
-  // 最後に埋まった穴の落下演出(最長でスピン.5s+落下.15s=.65s)が終わってから、
-  // 埋まった穴を0.5秒ほど見せてからクリア表示を出す
-  const wait = 650 + 500 + pendingStagger;
+  // 最後に埋まった穴の落下演出(最長でスピン.5s+落下.15s=.65s)
+  const holeSettle = 650;
+  const poofPause = 300; // 穴が落ち着いてからひと呼吸おいて、おばけの消失演出を始める
+  const leftoverCount = ghostEls.length;
+  const poofSpan = leftoverCount > 0 ? (leftoverCount - 1) * 90 + 1000 : 0; // 最後の1体が消えきるまで
+  if (leftoverCount > 0) {
+    setTimeout(poofRemainingGhosts, holeSettle + poofPause + pendingStagger);
+  }
   if (lv.finale) {
+    // フィナーレはエンディング演出そのものが主役なので、おばけの消失演出を
+    // 待たせずに従来どおりのタイミングで遷移する（消失は裏で進んでいてよい）
     setTimeout(playEnding, 900 + pendingStagger);
     return;
   }
+  // 埋まった穴（＋残ったおばけの消失演出）を見せてからクリア表示を出す
+  const wait = leftoverCount > 0
+    ? holeSettle + poofPause + poofSpan + 200 + pendingStagger
+    : holeSettle + 500 + pendingStagger;
   const par = parOf(lv.id);
   const stars = starsForTurns(par, cur.turn); // 今回のクリア手数基準（歴代ベストは別途レベル選択で表示）
   const isPerfect = par && cur.turn <= par; // ソルバーの最短(以下)で塞いだ
