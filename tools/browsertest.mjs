@@ -37,6 +37,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 let failures = 0;
 const consoleIssues = [];
 
+// 全体の壁時計タイムアウト（既定3分）。どこかで無限に止まっても必ず終了する。
+const WATCHDOG_MS = Number(process.env.E2E_TIMEOUT_MS) || 180000;
+const watchdog = setTimeout(() => {
+  console.log(`❌ E2E がタイムアウトしました（${WATCHDOG_MS}ms）。強制終了します。`);
+  process.exit(1);
+}, WATCHDOG_MS);
+
 const browser = await puppeteer.launch({
   executablePath: EDGE,
   headless: true,
@@ -87,6 +94,7 @@ for (let i = 0; i < LEVELS.length; i++) {
   const lv = LEVELS[i];
   const sol = SOLUTIONS[lv.id];
   if (!sol || !sol.path) { console.log(`❌ ${lv.id} solutions.js に解がない`); failures++; continue; }
+  process.stderr.write(`   … ${lv.id} ${lv.name} 開始 (${sol.path.length}手)\n`);
   await page.evaluate(idx => window.__game.startLevel(idx), i);
   await sleep(120);
   const shotLevels = ['n01', 'n03', 'n05', 'n08', 'n13', 'n16', 'n18', 'n19'];
@@ -288,5 +296,6 @@ if (consoleIssues.length) {
 } else console.log('✅ コンソールエラーなし');
 
 await browser.close();
+clearTimeout(watchdog);
 console.log(failures ? `\nNG x${failures}` : '\nE2E ALL OK');
 process.exit(failures ? 1 : 0);

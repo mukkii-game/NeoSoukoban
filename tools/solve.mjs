@@ -31,10 +31,19 @@ function makeStart(level, overrides = {}) {
 export function solve(level, overrides = {}, opts = {}) {
   const maxStates = opts.maxStates || 3_000_000;
   const maxDepth = opts.maxDepth || 400;
+  const deadlineMs = opts.deadlineMs || 20_000; // 壁時計タイムアウト（既定20秒）。CLI 側でさらに上書き可
+  const progressEvery = opts.progressEvery || 0; // >0 なら深さ何段ごとに進捗を stderr へ
+  const t0 = Date.now();
   const start = makeStart(level, overrides);
   const seen = new Set([Engine.serialize(start)]);
   let frontier = [{ s: start, path: [] }];
   for (let depth = 0; depth < maxDepth && frontier.length; depth++) {
+    if (Date.now() - t0 > deadlineMs) {
+      return { solved: false, reason: 'timeout', states: seen.size, ms: Date.now() - t0 };
+    }
+    if (progressEvery && depth % progressEvery === 0) {
+      process.stderr.write(`   … depth ${depth}, frontier ${frontier.length}, seen ${seen.size}, ${Date.now() - t0}ms\n`);
+    }
     const next = [];
     for (const node of frontier) {
       for (const d of DIR_KEYS) {
@@ -54,6 +63,9 @@ export function solve(level, overrides = {}, opts = {}) {
           return { solved: false, reason: 'state-explosion', states: seen.size }; // メモリガード
         }
       }
+      if (Date.now() - t0 > deadlineMs) {
+        return { solved: false, reason: 'timeout', states: seen.size, ms: Date.now() - t0 };
+      }
     }
     frontier = next;
   }
@@ -72,7 +84,7 @@ if (process.argv[1] && process.argv[1].endsWith('solve.mjs')) {
 }
 function runCli() {
 const emit = process.argv.includes('--emit');
-const only = process.argv.find(a => /^n\d+$/.test(a));
+const only = process.argv.find(a => LEVELS.some(l => l.id === a));
 const solutions = {};
 
 /* 巨大面用: 段階的グリーディ探索。
