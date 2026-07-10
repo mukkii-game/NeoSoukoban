@@ -169,18 +169,26 @@
       if (chain.includes(g2)) { loop = true; break; } // wrap一周の輪
       chain.push(g2);
     }
-    const hole = loop ? null : openHoleAt(s, cx, cy);
-    if (loop || isWall(s, cx, cy) || boxAt(s, cx, cy) ||
-        (cx === s.player.x && cy === s.player.y)) {
+    if (loop || (cx === s.player.x && cy === s.player.y)) {
       return { blocked: true, cx, cy };
     }
-    if (chain.length === 1 && soloAlwaysDodges && !ghost.wobbling &&
-        (!!hole || hadMomentum.get(ghost) !== dirName)) {
+    // 単体（列の長さ1）をプレイヤーが直接押す場合だけは特別扱い: 先が壁でも
+    // 箱でも「何もできずに弾かれる」のではなく、必ず「ヒョイ」で済ませる
+    // （逃げ場の有無を問わず、単体は常によける）。2体以上の列や箱に押された
+    // 場合は、これまでどおり壁・箱で本当にブロックされる。
+    const soloCanDodgeHere = chain.length === 1 && soloAlwaysDodges && !ghost.wobbling;
+    const wallOrBoxBlocked = isWall(s, cx, cy) || boxAt(s, cx, cy);
+    if (wallOrBoxBlocked && !soloCanDodgeHere) {
+      return { blocked: true, cx, cy };
+    }
+    const hole = wallOrBoxBlocked ? null : openHoleAt(s, cx, cy);
+    if (soloCanDodgeHere && (wallOrBoxBlocked || !!hole || hadMomentum.get(ghost) !== dirName)) {
       // 単体のおばけは、押し手の後ろが空いていれば必ずよけて戻る
       // （逃げ場がなくなる＝2体以上の連結か、箱に押された場合、既にばたばた中
       // だけ捕まる）。「勢い」は床を進むときだけ足踏みを省く効果で、
-      // 穴に対しては勢いだけでは捕まらない＝単体で穴に触れたら必ずよける
-      // （連結2体以上でなければ穴には捕まらない、という原則を守る）。
+      // 穴・壁・箱に対しては勢いだけでは捕まらない/ブロックされない＝
+      // 単体で触れたら必ずよける（連結2体以上でなければ捕まらない、という
+      // 原則を守る）。
       ghost.stun = 1; // よけるのに精一杯で、このターンは動けない
       events.push({ type: 'dodge', x: ghost.x, y: ghost.y, dx, dy, tx: cx, ty: cy });
       return { dodge: true };
