@@ -198,6 +198,11 @@
     // もしくは自分が既にばたばた中（前ターンからの続き）なら即プラグせず
     // 「ばたばた」状態で足踏みする（次のターンに動かされなければ確定して落ちる）。
     // それ以外（孤立した穴、または単体の即席キャッチ）は従来どおり即プラグ。
+    // holeTouchedInChain: この列のどこか（自分より奥）で穴に触れた（プラグ／
+    // ばたばた化した）瞬間、その巻き添えで単体になった残りの子に「勢い」を
+    // タダで持たせない。穴が絡まなかった純粋な床の連結押しだけ、従来どおり
+    // 勢いがつく（連打・長押しを続ける限りよけずに済む、という趣旨を維持）。
+    let holeTouchedInChain = false;
     for (let i = chain.length - 1; i >= 0; i--) {
       const g = chain[i];
       const fx = g.x, fy = g.y;
@@ -207,6 +212,7 @@
       g.stun = 1; // 押されたおばけは目を回してこのターン動けない
       touchedWobble.add(g);
       if (h) {
+        holeTouchedInChain = true;
         const beyond = cellInDir(s, n.x, n.y, dx, dy);
         const extendable = chain.length >= 2 && !!openHoleAt(s, beyond.x, beyond.y);
         if (g.wobbling || extendable) {
@@ -219,7 +225,7 @@
         }
       } else {
         g.wobbling = false;
-        g.momentum = dirName; // 次のターンも同方向に押され続ければ、よけずに済む
+        g.momentum = holeTouchedInChain ? null : dirName; // 次のターンも同方向に押され続ければ、よけずに済む
         events.push({ type: 'push', what: 'ghost', fx, fy, tx: n.x, ty: n.y });
       }
     }
