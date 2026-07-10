@@ -156,6 +156,7 @@ let lastInputAt = 0;
 let ended = false;          // エンディング再生中フラグ
 let autoplay = null;        // 模範解答再生タイマー
 let clearOvTimer = null;    // クリア演出の遅延表示タイマー（レベル移動時に必ず破棄する）
+let autoWaitTimer = null;   // 「ばたばた」演出用の自動待ちタイマー（UI側のみ。エンジンには実時間要素を持ち込まない）
 let pendingStagger = 0;     // ぎょうれつ演出の残り時間（クリア演出を待たせる）
 
 // BGM を鳴らしてよい状況か（Sfx から参照）。クリア後も止めない（ジングル中はダッキング）
@@ -267,6 +268,7 @@ function startLevel(i, keepEffort = false) {
   undoStack = [];
   if (!keepEffort) { levelEffort = 0; whisperShown = false; }
   if (clearOvTimer) { clearTimeout(clearOvTimer); clearOvTimer = null; }
+  if (autoWaitTimer) { clearTimeout(autoWaitTimer); autoWaitTimer = null; }
   ovClear.classList.remove('active');
   $('clear-perfect').innerHTML = '';
   $('hud-time').textContent = lv.time;
@@ -401,6 +403,9 @@ function input(dir, fromAuto = false) {
   if (!fromAuto && now - lastInputAt < 150) return;
   lastInputAt = now;
   const myGen = playGen; // このターンの遅延コールバックが、後のやりなおし/undoをまたいで発火しないようにする
+  // 新しい入力が来た＝「ばたばた」自動待ちタイマーは役目を終えたので必ず破棄する
+  // （このターンの処理の中で必要ならすぐ下で新しく張り直す）
+  if (autoWaitTimer) { clearTimeout(autoWaitTimer); autoWaitTimer = null; }
 
   const prevPlayer = { x: cur.player.x, y: cur.player.y };
   const { state, events, turnConsumed } = Engine.step(cur, dir);
@@ -614,6 +619,20 @@ function input(dir, fromAuto = false) {
   updateCamera();
   maybeWhisper();
   scheduleDeadlockCheck();
+
+  // 「ばたばた」（land）が発生したターンだけ、0.5秒操作が無ければ自動で
+  // 「待つ」を1回送って確定させる（UI側だけの仕組み。エンジンは常に
+  // 明示的な1入力からしか状態を進めないので決定論は崩れない。プレイヤーが
+  // その前に何か操作すれば、このターンの冒頭で必ずキャンセルされ、新しい
+  // landが起きればまた0.5秒張り直される）。
+  if (cur.status === 'playing' && events.some(e => e.type === 'land')) {
+    autoWaitTimer = setTimeout(() => {
+      autoWaitTimer = null;
+      if (cur && cur.status === 'playing' && !autoplay && !ovClear.classList.contains('active')) {
+        input('wait', true);
+      }
+    }, 500);
+  }
 }
 
 function movePlayerTo(x, y, prev) {
@@ -860,6 +879,7 @@ function isPerfectCleared(id) {
 // Undo 用: 状態からスプライトを作り直す（アニメなし）
 function refreshFromState() {
   playGen++;
+  if (autoWaitTimer) { clearTimeout(autoWaitTimer); autoWaitTimer = null; }
   objsEl.innerHTML = '';
   boxEls = []; ghostEls = []; pendingHoleFills = new Set(); awaitingConfirm = new Set();
   playerEl = makeSprite('player', '<span class="body">😼</span>');
