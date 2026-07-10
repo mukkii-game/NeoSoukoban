@@ -174,10 +174,13 @@
         (cx === s.player.x && cy === s.player.y)) {
       return { blocked: true, cx, cy };
     }
-    if (chain.length === 1 && soloAlwaysDodges && !ghost.wobbling && hadMomentum.get(ghost) !== dirName) {
+    if (chain.length === 1 && soloAlwaysDodges && !ghost.wobbling &&
+        (!!hole || hadMomentum.get(ghost) !== dirName)) {
       // 単体のおばけは、押し手の後ろが空いていれば必ずよけて戻る
-      // （逃げ場がなくなる＝2体以上の連結か、箱に押された場合、既にばたばた中、
-      // または直前ターンからの勢いが残っている場合だけ捕まる）。
+      // （逃げ場がなくなる＝2体以上の連結か、箱に押された場合、既にばたばた中
+      // だけ捕まる）。「勢い」は床を進むときだけ足踏みを省く効果で、
+      // 穴に対しては勢いだけでは捕まらない＝単体で穴に触れたら必ずよける
+      // （連結2体以上でなければ穴には捕まらない、という原則を守る）。
       ghost.stun = 1; // よけるのに精一杯で、このターンは動けない
       events.push({ type: 'dodge', x: ghost.x, y: ghost.y, dx, dy, tx: cx, ty: cy });
       return { dodge: true };
